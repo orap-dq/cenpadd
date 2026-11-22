@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es-MX">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CENPADD</title>
+
+  <!-- Pieza 1 de la PWA: el manifiesto (la "credencial" de la app) -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#5bc5d0">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="icon-192.png">
+
+  <style>
+    :root {
+      --verde: #8dc63f;
+      --cian:  #5bc5d0;
+      --gris:  #808285;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: #fff;
+      color: #333;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      text-align: center;
+    }
+    img.logo { width: 180px; max-width: 60vw; height: auto; }
+    h1 { margin: 20px 0 4px; font-size: 1.6rem; color: var(--gris); }
+    p.sub { margin: 0 0 24px; color: var(--gris); }
+
+    .estado {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 8px 16px; border-radius: 999px;
+      font-weight: 600; font-size: .95rem;
+    }
+    .estado::before {
+      content: ""; width: 10px; height: 10px; border-radius: 50%;
+      background: currentColor;
+    }
+    .en-linea   { background: #eef7e2; color: #4c8a12; }
+    .sin-senal  { background: #fdeaea; color: #b3261e; }
+
+    button {
+      margin-top: 24px;
+      padding: 14px 28px;
+      font-size: 1rem; font-weight: 600;
+      color: #fff; background: var(--verde);
+      border: 0; border-radius: 12px;
+      cursor: pointer;
+    }
+    button[hidden] { display: none; }
+
+    footer { margin-top: 32px; font-size: .8rem; color: #aaa; }
+  </style>
+</head>
+<body>
+
+  <img class="logo" src="logo.png" alt="Logo ORAP CENPADD">
+  <h1>¡Hola, CENPADD!</h1>
+  <p class="sub">Censo Parroquial Digital Diocesano</p>
+
+  <!-- Indicador de conexión -->
+  <div id="estado" class="estado en-linea">En línea</div>
+
+  <!-- Botón de instalar: solo aparece si Chrome lo permite -->
+  <button id="btnInstalar" hidden>Instalar app</button>
+
+  <footer>ORAP · Diócesis de Querétaro · versión de prueba 1</footer>
+
+  <script>
+    // ---------------------------------------------------------
+    // Pieza 2 de la PWA: registrar el service worker (sw.js)
+    // ---------------------------------------------------------
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js')
+        .then(() => console.log('Service worker registrado'))
+        .catch((err) => console.error('Error al registrar el service worker:', err));
+    }
+
+    // ---------------------------------------------------------
+    // Indicador "En línea" / "Sin señal"
+    // ---------------------------------------------------------
+    const estado = document.getElementById('estado');
+    function actualizarEstado() {
+      if (navigator.onLine) {
+        estado.textContent = 'En línea';
+        estado.className = 'estado en-linea';
+      } else {
+        estado.textContent = 'Sin señal (la app sigue funcionando)';
+        estado.className = 'estado sin-senal';
+      }
+    }
+    window.addEventListener('online', actualizarEstado);
+    window.addEventListener('offline', actualizarEstado);
+    actualizarEstado();
+
+    // ---------------------------------------------------------
+    // Botón "Instalar app"
+    // Chrome avisa cuando la página se puede instalar; guardamos
+    // ese aviso y mostramos nuestro propio botón.
+    // ---------------------------------------------------------
+    let avisoInstalar = null;
+    const btn = document.getElementById('btnInstalar');
+
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      avisoInstalar = e;
+      btn.hidden = false;
+    });
+
+    btn.addEventListener('click', async () => {
+      if (!avisoInstalar) return;
+      avisoInstalar.prompt();
+      await avisoInstalar.userChoice;
+      avisoInstalar = null;
+      btn.hidden = true;
+    });
+
+    // Si ya se instaló, ocultamos el botón
+    window.addEventListener('appinstalled', () => { btn.hidden = true; });
+  </script>
+</body>
+</html>
