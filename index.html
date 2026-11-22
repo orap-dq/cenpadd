@@ -138,7 +138,7 @@
 
 <script>
 'use strict';
-const VERSION = 'PWA 2.0';
+const VERSION = 'PWA 2.1';
 
 // Dirección de CENPADD Central (Implementar → Aplicación web → URL que termina en /exec).
 const URL_API = 'https://script.google.com/macros/s/AKfycbxWRdSUn45l2AIjOAEcErQZP-SniOmd7L_nG8A6sT73l9QFjiz-3fX7jNOj9IFitmE3/exec';
@@ -256,6 +256,11 @@ async function servidor(accion, ...args) {
 // Traduce un error del servidor a un mensaje claro y decide qué hacer.
 function manejarError(e, queHacia) {
   const m = String(e && e.message || e);
+  if (esProyectoNoDisponible(m) && queHacia !== 'consultar las parroquias') {
+    toast(`No se pudo ${queHacia}: ${m.replace(/^Error:\s*/, '')}`, 7000, true);
+    PANTALLA = null; pintarNoDisponible(m);
+    return;
+  }
   if (m.indexOf('SESION:') >= 0) {
     // El token ya no vale (cambió el día, cambió el PIN o lo desactivaron).
     // La visita en curso se conserva en el teléfono.
@@ -651,6 +656,18 @@ async function cambiarParroquia() {
   irA(pantallaParroquia);
 }
 
+// ¿El error dice que el proyecto ya no recibe datos (cerrado, aún no inicia o ya no existe)?
+const esProyectoNoDisponible = (m) => /cerrado|no ha iniciado|No existe el proyecto/i.test(String(m));
+
+// Aviso de censo no disponible. Si hay una visita a medias, se avisa que sigue guardada.
+function pintarNoDisponible(m) {
+  pintar(`${PORTADA}<div class="alerta"><b>${esc(String(m).replace(/^Error:\s*/, ''))}</b><br>
+    Ya no se pueden capturar ni enviar visitas de esta parroquia.
+    ${S.borrador ? '<br>La visita que tenías sin terminar sigue guardada en este teléfono.' : ''}</div>
+    <button class="btn sec" data-accion="reintentar-config">Volver a revisar</button>
+    <button class="btn sec" data-accion="cambiar-parroquia">Elegir otra parroquia</button>`);
+}
+
 // ===========================================================================
 // 11) DATOS DEL PROYECTO Y ENTRADA DEL ENCUESTADOR
 // ===========================================================================
@@ -660,12 +677,10 @@ async function cargarConfig() {
     return true;
   } catch (e) {
     const m = String(e.message || e);
-    // El proyecto ya no recibe datos (cerrado, aún no inicia o ya no existe).
-    const sinProyecto = /cerrado|no ha iniciado|No existe el proyecto/i.test(m);
-    pintar(`${PORTADA}<div class="alerta"><b>${sinProyecto ? esc(m.replace(/^Error:\s*/, ''))
-        : 'No se pudieron descargar los datos de la parroquia.'}</b><br>
-      ${sinProyecto ? 'Si te cambiaron de parroquia, elige la nueva.' : 'Revisa tu conexión a internet.'}</div>
-      ${sinProyecto ? '' : '<button class="btn" data-accion="reintentar-config">Reintentar</button>'}
+    if (esProyectoNoDisponible(m)) { PANTALLA = null; pintarNoDisponible(m); return false; }
+    pintar(`${PORTADA}<div class="alerta"><b>No se pudieron descargar los datos de la parroquia.</b><br>
+      Revisa tu conexión a internet.</div>
+      <button class="btn" data-accion="reintentar-config">Reintentar</button>
       <button class="btn sec" data-accion="cambiar-parroquia">Elegir otra parroquia</button>`);
     return false;
   }
@@ -743,6 +758,7 @@ async function cargarResumen() {
       </ul>`;
   } catch (e) {
     if (String(e.message).indexOf('SESION:') >= 0) return manejarError(e, 'consultar');
+    if (esProyectoNoDisponible(e.message)) { if (PANTALLA === pantallaInicio) { PANTALLA = null; pintarNoDisponible(e.message); } return; }
     const el = $('#resumenHoy'); if (el) el.innerHTML = '<span class="suave">No se pudo consultar el resumen (¿sin internet?).</span>';
   }
 }
@@ -781,6 +797,17 @@ function continuarBorrador() {
   if (!b) return irA(pantallaInicio);
   const mapa = { familia: pantallaFamilia, miembros: pantallaMiembros, miembro: pantallaMiembro, cierre: pantallaCierre, no_lograda: pantallaNoLograda };
   irA(mapa[b.paso] || pantallaInicio);
+}
+
+// Pregunta al servidor si el censo sigue En curso antes de empezar una visita.
+// Si no hay señal, deja continuar (el servidor lo revisará de todos modos al enviar).
+async function censoAbierto() {
+  esperando(true, 'Revisando…');
+  try { S.config = await servidor('censoDatosIniciales'); return true; }
+  catch (e) {
+    if (esProyectoNoDisponible(e.message)) { PANTALLA = null; pintarNoDisponible(e.message); return false; }
+    return true;
+  } finally { esperando(false); }
 }
 
 function irPaso(paso) { S.borrador.paso = paso; LS.set('borrador', S.borrador); continuarBorrador(); }
@@ -976,8 +1003,8 @@ const ACCIONES = {
     S.sesion = null; LS.del('sesion'); irA(pantallaLogin);
   },
   'inicio': () => irA(pantallaInicio),
-  'nueva': () => irA(pantallaResultado),
-  'continuar': continuarBorrador,
+  'nueva': async () => { if (await censoAbierto()) irA(pantallaResultado); },
+  'continuar': async () => { if (await censoAbierto()) continuarBorrador(); },
   'res-realizada': () => nuevoBorrador('familia', 'Encuesta realizada'),
   'res-nadie': () => nuevoBorrador('no_lograda', 'Nadie en casa'),
   'res-noquiso': () => nuevoBorrador('no_lograda', 'No quiso participar'),

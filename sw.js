@@ -6,7 +6,7 @@
 
 // Cada vez que cambies cualquier archivo de la app, sube este número
 // (v1 → v2 → v3...). Así los celulares saben que hay versión nueva.
-const VERSION = 'cenpadd-v2';
+const VERSION = 'cenpadd-v3';
 
 // Archivos que se guardan en el celular
 const ARCHIVOS = [
