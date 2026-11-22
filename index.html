@@ -13,8 +13,9 @@
     servidor('censoEntrar', codigo, pin)  → manda un POST a la URL /exec (URL_API)
     con { accion, clave del proyecto, args } y recibe { ok, data } o { ok:false, error }.
 
-  Siempre con internet (por ahora). Si falla el envío, la ficha NO se pierde:
-  queda guardada en el teléfono y se puede volver a intentar.
+  Funciona SIN SEÑAL: cada visita se guarda primero en el teléfono (cola de pendientes,
+  en IndexedDB) y se envía en cuanto hay conexión. Los datos de la parroquia y la
+  revisión del PIN también se guardan, para poder entrar y capturar sin señal.
 -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
@@ -138,7 +139,7 @@
 
 <script>
 'use strict';
-const VERSION = 'PWA 2.1';
+const VERSION = 'PWA 2.2';
 
 // Dirección de CENPADD Central (Implementar → Aplicación web → URL que termina en /exec).
 const URL_API = 'https://script.google.com/macros/s/AKfycbxWRdSUn45l2AIjOAEcErQZP-SniOmd7L_nG8A6sT73l9QFjiz-3fX7jNOj9IFitmE3/exec';
@@ -178,7 +179,9 @@ const S = {
   config: null,     // lo que manda censoDatosIniciales: parroquia, equipo, sectores
   sesion: null,     // {codigo, nombre, token, fecha} — lo devuelve censoEntrar
   borrador: null,   // la visita que se está capturando
-  ultimos: {}       // última colonia/calle/sector, para no reescribirlos en cada casa
+  ultimos: {},      // última colonia/calle/sector, para no reescribirlos en cada casa
+  pendientes: [],   // visitas guardadas en el teléfono que aún no llegan al servidor
+  sinSenal: false   // true si los datos de la parroquia vienen de la memoria del teléfono
 };
 
 // ===========================================================================
@@ -233,20 +236,27 @@ function guardarBorradorPronto() {
 // Ejemplo: const r = await servidor('censoEntrar', '02', '1234');
 // Se manda como "text/plain" para que el navegador no tenga que pedir permiso
 // previo (CORS) a Google: así funciona desde GitHub Pages.
-async function servidor(accion, ...args) {
+function servidor(accion, ...args) { return llamar(S.proyecto, accion, args); }
+
+// Igual que servidor(), pero indicando el proyecto (las visitas pendientes guardan el suyo).
+// Si el servidor no contesta en 45 s (señal muy débil), se trata como "sin conexión".
+async function llamar(clave, accion, args) {
   if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(URL_API)) {
     throw new Error('La app no tiene configurada la dirección de CENPADD Central (URL_API).');
   }
   let resp;
+  const corte = new AbortController();
+  const reloj = setTimeout(() => corte.abort(), 45000);
   try {
     resp = await fetch(URL_API, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ accion, clave: S.proyecto, args })
+      body: JSON.stringify({ accion, clave, args }),
+      signal: corte.signal
     });
   } catch (e) {
     throw new Error('Failed to fetch: sin conexión con el servidor');
-  }
+  } finally { clearTimeout(reloj); }
   if (!resp.ok) throw new Error('El servidor respondió con un error (' + resp.status + ').');
   const r = await resp.json();
   if (!r.ok) throw new Error(r.error || 'Respuesta no válida del servidor.');
@@ -272,6 +282,117 @@ function manejarError(e, queHacia) {
   const red = /network|red|conexi|failed to fetch|http 0/i.test(m);
   toast(red ? `Sin conexión: no se pudo ${queHacia}. Revisa tu internet y vuelve a intentar.`
             : `No se pudo ${queHacia}: ${m.replace(/^Error:\s*/, '')}`, 7000, true);
+}
+
+const esSinRed = (m) => /failed to fetch|sin conexi|network/i.test(String(m));
+
+// --- Huella SHA-256 (la misma que usa CENPADD Central, con su "sal") ---
+// Sirve para revisar el PIN y armar la sesión cuando no hay señal.
+async function huella(txt) {
+  const datos = new TextEncoder().encode('cenpadd-central|' + txt);
+  const h = await crypto.subtle.digest('SHA-256', datos);
+  return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+// --- Cola de pendientes (IndexedDB: aguanta fotos y muchas visitas) ---
+// Cada pendiente: { uuid, tipo: 'ficha' | 'noLograda', clave, sesion, reg, creado, etiqueta, error }
+const COLA = {
+  db: null,
+  abrir() {
+    if (this.db) return Promise.resolve(this.db);
+    return new Promise((ok, falla) => {
+      const r = indexedDB.open('cenpadd', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('cola', { keyPath: 'uuid' });
+      r.onsuccess = () => { this.db = r.result; ok(this.db); };
+      r.onerror = () => falla(r.error);
+    });
+  },
+  async op(modo, fn) {
+    const db = await this.abrir();
+    return new Promise((ok, falla) => {
+      const t = db.transaction('cola', modo);
+      const pet = fn(t.objectStore('cola'));
+      t.oncomplete = () => ok(pet ? pet.result : undefined);
+      t.onerror = () => falla(t.error);
+    });
+  },
+  poner(item) { return this.op('readwrite', (st) => st.put(item)); },
+  quitar(uuid) { return this.op('readwrite', (st) => st.delete(uuid)); },
+  async todos() { return ((await this.op('readonly', (st) => st.getAll())) || []).sort((a, b) => a.creado.localeCompare(b.creado)); }
+};
+
+async function actualizarPendientes() {
+  try { S.pendientes = await COLA.todos(); } catch (e) { S.pendientes = []; }
+  pintarPendientes();
+}
+
+// Envía, uno por uno, lo que está en la cola. Se detiene si no hay señal.
+// Devuelve { enviadas, sinRed, resultados: { uuid: respuesta del servidor } }.
+let ENVIANDO = null;
+function enviarCola() {
+  if (!ENVIANDO) ENVIANDO = enviarCola_().finally(() => { ENVIANDO = null; });
+  return ENVIANDO;
+}
+async function enviarCola_() {
+  const out = { enviadas: 0, sinRed: false, resultados: {} };
+  let items = [];
+  try { items = await COLA.todos(); } catch (e) { return out; }
+  for (const it of items) {
+    try {
+      out.resultados[it.uuid] = await enviarItem(it);
+      await COLA.quitar(it.uuid);
+      out.enviadas++;
+    } catch (e) {
+      const m = String(e.message || e);
+      if (esSinRed(m)) { out.sinRed = true; break; }
+      // El servidor la rechazó (censo cerrado, PIN cambiado…): queda en la cola con el motivo.
+      it.error = m.replace(/^Error:\s*/, '').replace(/^SESION:\s*/, '');
+      await COLA.poner(it);
+      if (esProyectoNoDisponible(m)) break;
+    }
+  }
+  await actualizarPendientes();
+  return out;
+}
+
+async function enviarItem(it) {
+  const accion = it.tipo === 'ficha' ? 'censoGuardarFicha' : 'censoGuardarNoLograda';
+  try {
+    return await llamar(it.clave, accion, [it.sesion, it.reg]);
+  } catch (e) {
+    // Si su sesión ya no vale (p. ej. le cambiaron el PIN) pero ese mismo encuestador
+    // ya volvió a entrar hoy, se reintenta con su sesión nueva.
+    const s = S.sesion;
+    if (String(e.message).indexOf('SESION:') >= 0 && s && !s.sinSenal && s.codigo === it.sesion.codigo &&
+        it.clave === S.proyecto && s.token !== it.sesion.token) {
+      it.sesion = s;
+      return await llamar(it.clave, accion, [it.sesion, it.reg]);
+    }
+    throw e;
+  }
+}
+
+// Guarda una visita en la cola y trata de enviarla de inmediato.
+async function encolarYEnviar(item) {
+  await COLA.poner(item);
+  await actualizarPendientes();
+  esperando(true, 'Enviando…');
+  try { return await enviarCola(); } finally { esperando(false); }
+}
+
+// Recuadro de pendientes en la pantalla de inicio.
+function pintarPendientes() {
+  const caja = $('#pendientes');
+  if (!caja) return;
+  const p = S.pendientes;
+  if (!p.length) { caja.innerHTML = ''; return; }
+  const conError = p.filter((x) => x.error).length;
+  caja.innerHTML = `<div class="${conError ? 'alerta' : 'aviso'}">
+    <b>📤 ${p.length} ${p.length === 1 ? 'visita guardada en el teléfono' : 'visitas guardadas en el teléfono'}, sin enviar</b>
+    <ul class="lista-reg">${p.map((x) => `<li><span>${esc(x.etiqueta)}${x.error ? `<br><span class="peq" style="color:var(--rojo)">${esc(x.error)}</span>` : ''}</span>
+      <span class="peq suave">${esc(x.creado.slice(5, 16))}</span></li>`).join('')}</ul>
+    <p class="peq" style="margin:8px 0 0">${navigator.onLine ? 'Se enviarán solas en unos momentos.' : 'Sin señal: se enviarán solas cuando el teléfono tenga internet.'}</p>
+    <button class="btn" data-accion="enviar-pendientes">Enviar ahora</button></div>`;
 }
 
 // ===========================================================================
@@ -372,14 +493,74 @@ const CAMPOS_MIEMBRO = [
   { id: 'pequenaComunidadOtra', l: 'Especificar comunidad', t: 'text', req: true, si: (d) => esCatolico(d) && d.pequenaComunidad === 'Otro' }
 ];
 
-function camposCierre(hayCatolico) {
+// --- Módulo de familia: tipo de hogar, jefatura y quién cuida a cada enfermo ---
+const TIPOS_HOGAR = ['Nuclear', 'Ampliado', 'Compuesto', 'Unipersonal', 'Corresidente'];
+const AYUDA_HOGAR = 'Nuclear: papá y/o mamá con sus hijos, o pareja sola. Ampliado: hogar nuclear con otros parientes. ' +
+  'Compuesto: hogar con alguna persona sin parentesco. Unipersonal: una sola persona. Corresidente: varias personas sin parentesco entre sí.';
+const CUIDA_SOLO = 'Se cuida solo(a)', CUIDA_OTRA = 'Otra persona (no vive en el hogar)', CUIDA_NADIE = 'Nadie';
+
+// Sugerencia según los parentescos capturados (el encuestador confirma o corrige).
+function sugerirHogar(miembros) {
+  if (miembros.length === 1) return 'Unipersonal';
+  const noPar = miembros.filter((m) => m.parentesco === 'No pariente').length;
+  if (noPar === miembros.length) return 'Corresidente';
+  if (noPar) return 'Compuesto';
+  if (miembros.some((m) => ['Abuelo(a)', 'Otro pariente'].includes(m.parentesco))) return 'Ampliado';
+  return 'Nuclear';
+}
+const etiquetaMiembro = (m, i) => `${i + 1}. ${resumenMiembro(m)}`;
+
+function camposFamilia(miembros) {
+  const nombres = miembros.map(etiquetaMiembro);
+  const campos = [
+    { id: 'tituloHogar', t: 'html', html: () => '<h2>Hogar</h2>' },
+    { id: 'tipoHogar', l: 'Tipo de hogar', t: 'radio', req: true, op: TIPOS_HOGAR,
+      ayuda: `${AYUDA_HOGAR} Sugerido según los miembros: ${sugerirHogar(miembros)}.` },
+    { id: 'jefatura', l: '¿Quién es la jefa o el jefe del hogar?', t: 'select', req: true,
+      op: [...nombres, 'Jefatura compartida'], ayuda: 'La persona que la familia reconoce como responsable del hogar.' }
+  ];
+  // Una pregunta por cada persona enferma (solo si la hay).
+  const enfermos = miembros.map((m, i) => ({ m, i })).filter((x) => x.m.enfermedad === 'Sí');
+  if (enfermos.length) campos.push({ id: 'tituloCuidado', t: 'html', html: () => '<h2>Cuidado de enfermos</h2>' });
+  enfermos.forEach(({ m, i }) => {
+    campos.push({
+      id: 'cuid_' + i, t: 'select', req: true,
+      l: `¿Quién cuida a ${etiquetaMiembro(m, i)}${m.enfermedadEsp ? ' (' + m.enfermedadEsp + ')' : ''}?`,
+      op: [...nombres.filter((_, j) => j !== i), CUIDA_SOLO, CUIDA_OTRA, CUIDA_NADIE],
+      ayuda: 'Quien lo cuida principalmente.'
+    });
+    campos.push({ id: 'cuidEsp_' + i, l: '¿Quién?', t: 'text', req: true, ayuda: 'Ej.: enfermera, vecina, hija que vive en otra casa.',
+      si: (d) => d['cuid_' + i] === CUIDA_OTRA });
+  });
+  return campos;
+}
+
+// --- Preguntas adicionales del censo (las define el equipo ORAP en Gestión) ---
+function camposAdicionales() {
+  const qs = (S.config && S.config.preguntas) || [];
+  if (!qs.length) return [];
+  return [{ id: 'tituloAdicionales', t: 'html', html: () => '<h2>Preguntas adicionales</h2>' }].concat(qs.map((q) => {
+    const base = { id: 'adic_' + q.id, l: q.pregunta, req: q.obligatoria };
+    switch (q.tipo) {
+      case 'Opción única': return { ...base, t: 'radio', op: q.opciones };
+      case 'Opción múltiple': return { ...base, t: 'multi', op: q.opciones };
+      case 'Sí/No': return { ...base, t: 'radio', op: L.sino };
+      case 'Número': return { ...base, t: 'number', min: 0, max: 999999 };
+      default: return { ...base, t: 'textarea' };
+    }
+  }));
+}
+
+function camposCierre(hayCatolico, miembros) {
   const si = () => hayCatolico;   // las preguntas abiertas solo si hay al menos un católico
   return [
+    ...camposFamilia(miembros),
     { id: 'tituloAbiertas', t: 'html', html: () => '<h2>Preguntas abiertas</h2><p class="suave peq">Opcionales.</p>', si },
     { id: 'p1', l: '¿Qué te gusta de la Parroquia?', t: 'textarea', si },
     { id: 'p2', l: '¿Qué no te gusta de tu Parroquia?', t: 'textarea', si },
     { id: 'p3', l: '¿Qué le pides a tu Parroquia?', t: 'textarea', si },
     { id: 'p4', l: '¿Qué persona ha influido más en tu fe?', t: 'textarea', si },
+    ...camposAdicionales(),
     { id: 'tituloVisita', t: 'html', html: () => '<h2>Visita</h2>' },
     { id: 'visitaFamilia', t: 'check', texto: 'Programar visita a la familia' },
     { id: 'motivoVisita', l: 'Motivo de la visita', t: 'text', req: true, si: (d) => d.visitaFamilia === true },
@@ -663,7 +844,8 @@ const esProyectoNoDisponible = (m) => /cerrado|no ha iniciado|No existe el proye
 function pintarNoDisponible(m) {
   pintar(`${PORTADA}<div class="alerta"><b>${esc(String(m).replace(/^Error:\s*/, ''))}</b><br>
     Ya no se pueden capturar ni enviar visitas de esta parroquia.
-    ${S.borrador ? '<br>La visita que tenías sin terminar sigue guardada en este teléfono.' : ''}</div>
+    ${S.borrador ? '<br>La visita que tenías sin terminar sigue guardada en este teléfono.' : ''}
+    ${S.pendientes.length ? `<br>Hay ${S.pendientes.length} visita(s) guardadas en el teléfono sin enviar; avisa al equipo ORAP.` : ''}</div>
     <button class="btn sec" data-accion="reintentar-config">Volver a revisar</button>
     <button class="btn sec" data-accion="cambiar-parroquia">Elegir otra parroquia</button>`);
 }
@@ -674,10 +856,15 @@ function pintarNoDisponible(m) {
 async function cargarConfig() {
   try {
     S.config = await servidor('censoDatosIniciales');
+    S.sinSenal = false;
+    LS.set('config_' + S.proyecto, S.config);   // copia para usarla sin señal
     return true;
   } catch (e) {
     const m = String(e.message || e);
     if (esProyectoNoDisponible(m)) { PANTALLA = null; pintarNoDisponible(m); return false; }
+    // Sin señal: usamos los datos de la parroquia guardados la última vez.
+    const copia = esSinRed(m) && LS.get('config_' + S.proyecto);
+    if (copia) { S.config = copia; S.sinSenal = true; return true; }
     pintar(`${PORTADA}<div class="alerta"><b>No se pudieron descargar los datos de la parroquia.</b><br>
       Revisa tu conexión a internet.</div>
       <button class="btn" data-accion="reintentar-config">Reintentar</button>
@@ -714,14 +901,35 @@ async function entrar() {
   esperando(true, 'Comprobando…');
   try {
     // El servidor compara con el PIN registrado en Gestión y devuelve un "token" del día.
-    S.sesion = await servidor('censoEntrar', codigo, pin);
+    const r = await servidor('censoEntrar', codigo, pin);
+    LS.set('verif_' + S.proyecto + '_' + codigo, r.verificador);   // para entrar otro día sin señal
+    S.sesion = { codigo: r.codigo, nombre: r.nombre, token: r.token, fecha: r.fecha };
     LS.set('sesion', S.sesion);
     irA(pantallaInicio);
+    enviarCola();
   } catch (e) {
     const m = String(e.message || e);
     if (/PIN incorrecto|no autorizado/i.test(m)) toast(m.replace(/^Error:\s*/, ''), 4000, true);
+    else if (esSinRed(m)) await entrarSinSenal(codigo, pin);
     else manejarError(e, 'entrar');
   } finally { esperando(false); }
+}
+
+// Sin señal: el PIN se revisa con la huella guardada la última vez que entró con internet
+// en ESTE teléfono, y la sesión se arma aquí mismo (el servidor la revisará al recibir las visitas).
+async function entrarSinSenal(codigo, pin) {
+  const verif = LS.get('verif_' + S.proyecto + '_' + codigo);
+  if (!verif || !window.crypto || !crypto.subtle) {
+    toast('Sin señal. La primera vez que entras en este teléfono necesitas internet.', 6000, true);
+    return;
+  }
+  if (await huella('v|' + S.proyecto + ':' + codigo + ':' + pin) !== verif) { toast('PIN incorrecto.', 4000, true); return; }
+  const persona = (S.config.equipo || []).find((x) => x.codigo === codigo) || { nombre: '' };
+  S.sesion = { codigo, nombre: persona.nombre, fecha: hoy(), sinSenal: true,
+    token: await huella(S.proyecto + ':' + codigo + ':' + pin + ':' + hoy()) };
+  LS.set('sesion', S.sesion);
+  toast('Entraste sin señal. Tus visitas se guardarán en el teléfono.', 5000);
+  irA(pantallaInicio);
 }
 
 // ===========================================================================
@@ -734,6 +942,8 @@ function pantallaInicio() {
     ${b ? `<div class="aviso"><b>Tienes una visita sin terminar</b>${b.datos && b.datos.familia ? ' (' + esc(b.datos.familia) + ')' : ''}.
       <button class="btn" data-accion="continuar">Continuar</button></div>`
         : `<button class="btn" data-accion="nueva">+ Nueva visita</button>`}
+    ${S.sinSenal ? '<div class="aviso peq">Sin señal: trabajando con los datos guardados en el teléfono.</div>' : ''}
+    <div id="pendientes"></div>
     ${S.config.sectores.length ? '' : '<div class="alerta">La parroquia aún no tiene sectores registrados. Pide al equipo ORAP que los capture en Gestión → Sectores.</div>'}
     <div class="tarjeta" id="resumenHoy"><span class="suave">Cargando lo que llevas hoy…</span></div>
     <div class="fila">
@@ -741,6 +951,7 @@ function pantallaInicio() {
       <button class="btn chico sec" data-accion="salir">Cambiar encuestador</button>
     </div>
     <p class="suave peq centro">${esc(S.config.parroquia)} · Versión ${VERSION}</p>`);
+  pintarPendientes();
   cargarResumen();
 }
 
@@ -759,7 +970,8 @@ async function cargarResumen() {
   } catch (e) {
     if (String(e.message).indexOf('SESION:') >= 0) return manejarError(e, 'consultar');
     if (esProyectoNoDisponible(e.message)) { if (PANTALLA === pantallaInicio) { PANTALLA = null; pintarNoDisponible(e.message); } return; }
-    const el = $('#resumenHoy'); if (el) el.innerHTML = '<span class="suave">No se pudo consultar el resumen (¿sin internet?).</span>';
+    const el = $('#resumenHoy');
+    if (el) el.innerHTML = '<span class="suave">Sin señal: lo que llevas hoy se verá al recuperar la conexión.</span>';
   }
 }
 
@@ -835,13 +1047,24 @@ async function guardarNoLograda() {
     tipoVivienda: d.tipoVivienda, tipoViviendaOtra: d.tipoViviendaOtra,
     lat: d.gps.lat, lng: d.gps.lng, precision: d.gps.precision, foto: d.foto || ''
   };
-  esperando(true, d.foto ? 'Enviando (con foto)…' : 'Enviando…');
-  try {
-    await servidor('censoGuardarNoLograda', S.sesion, reg);
-    terminarRegistro(d);
-    toast('Visita no lograda guardada ✓');
-  } catch (e) { manejarError(e, 'guardar la visita'); }
-  finally { esperando(false); }
+  const item = { uuid: b.uuid, tipo: 'noLograda', clave: S.proyecto, sesion: S.sesion, reg, creado: ahora(),
+    etiqueta: `${b.resultado} · ${d.calle} ${d.numExt}`, error: '' };
+  await guardarEnCola(item, d, () => 'Visita no lograda enviada ✓');
+}
+
+// Guarda en la cola, termina la visita y avisa si ya llegó al servidor o quedó pendiente.
+async function guardarEnCola(item, dom, mensajeEnviada) {
+  try { await COLA.poner(item); }
+  catch (e) { toast('No se pudo guardar en el teléfono: ' + e.message, 7000, true); return; }
+  terminarRegistro(dom);
+  const r = await encolarYEnviar(item);
+  if (r.resultados[item.uuid]) toast(mensajeEnviada(r.resultados[item.uuid]), 4500);
+  else if (r.sinRed) toast('Sin señal: la visita quedó guardada en el teléfono y se enviará sola.', 5000);
+  else {
+    const p = S.pendientes.find((x) => x.uuid === item.uuid);
+    toast('La visita quedó guardada en el teléfono, pero no se pudo enviar' + (p && p.error ? ': ' + p.error : '.'), 7000, true);
+    if (p && esProyectoNoDisponible(p.error)) { PANTALLA = null; pintarNoDisponible(p.error); }
+  }
 }
 
 // ---------- Paso 1: datos de la familia ----------
@@ -932,7 +1155,7 @@ function pantallaCierre() {
     else if (b.motivoAuto && actual.startsWith(b.motivoAuto) && b.motivoAuto !== auto) c.motivoVisita = auto + actual.slice(b.motivoAuto.length);
     b.motivoAuto = auto;
   }
-  FORM = { defs: camposCierre(hayCatolico), datos: c };
+  FORM = { defs: camposCierre(hayCatolico, b.miembros), datos: c };
   pintar(`${pasos(3)}<h1>Cierre de la ficha</h1>
     <p class="suave">${esc(b.datos.familia || '')} · ${b.miembros.length} ${b.miembros.length === 1 ? 'miembro' : 'miembros'}</p>
     ${auto ? `<p class="peq suave">La visita se marcó automáticamente (${esc(auto.toLowerCase())}). Puedes agregar texto al motivo.</p>` : ''}
@@ -955,19 +1178,17 @@ async function guardarFicha() {
     tipoVivienda: f.tipoVivienda, tipoViviendaOtra: f.tipoViviendaOtra,
     lat: f.gps.lat, lng: f.gps.lng, precision: f.gps.precision,
     tenencia: f.tenencia, tenenciaOtra: f.tenenciaOtra, telefono: f.telefono, email: f.email,
-    miembros: b.miembros.map((m) => limpio(CAMPOS_MIEMBRO, m)),
+    miembros: b.miembros.map((m, i) => ({ ...limpio(CAMPOS_MIEMBRO, m),
+      cuidador: c['cuid_' + i] || '', cuidadorEsp: c['cuidEsp_' + i] || '' })),
+    tipoHogar: c.tipoHogar, jefatura: c.jefatura,
+    adicionales: ((S.config && S.config.preguntas) || []).map((q) => ({ id: q.id, pregunta: q.pregunta,
+      respuesta: Array.isArray(c['adic_' + q.id]) ? c['adic_' + q.id] : String(c['adic_' + q.id] ?? '') })),
     p1: c.p1, p2: c.p2, p3: c.p3, p4: c.p4,
     visitaFamilia: c.visitaFamilia, motivoVisita: c.motivoVisita, observaciones: c.observaciones
   };
-  esperando(true);
-  try {
-    const r = await servidor('censoGuardarFicha', S.sesion, reg);
-    terminarRegistro(f);
-    toast(`Ficha ${r.ficha} guardada ✓`, 4500);
-  } catch (e) {
-    // La ficha sigue en el teléfono (borrador). Se puede volver a tocar "Guardar y enviar".
-    manejarError(e, 'enviar la ficha');
-  } finally { esperando(false); }
+  const item = { uuid: b.uuid, tipo: 'ficha', clave: S.proyecto, sesion: S.sesion, reg, creado: ahora(),
+    etiqueta: `Familia ${f.familia}`, error: '' };
+  await guardarEnCola(item, f, (r) => `Ficha ${r.ficha} enviada ✓`);
 }
 
 function terminarRegistro(dom) {
@@ -988,6 +1209,13 @@ function validarYSeguir(paso) {
 // 14) ACCIONES DE LOS BOTONES (cada botón tiene data-accion="nombre")
 // ===========================================================================
 const ACCIONES = {
+  'enviar-pendientes': async () => {
+    esperando(true, 'Enviando…');
+    const r = await enviarCola(); esperando(false);
+    if (r.enviadas) toast(`${r.enviadas} ${r.enviadas === 1 ? 'visita enviada' : 'visitas enviadas'} ✓`);
+    else if (r.sinRed) toast('Sigue sin haber señal. Se enviarán solas más tarde.', 5000, true);
+    if (r.enviadas && PANTALLA === pantallaInicio) cargarResumen();
+  },
   'buscar-parroquias': () => { S.proyectos = null; S.proyErr = false; render(); },
   'elegir-parroquia': (el) => elegirParroquia(el.getAttribute('data-clave')),
   'cambiar-parroquia': cambiarParroquia,
@@ -1071,7 +1299,14 @@ async function arrancar() {
   if (!S.sesion || S.sesion.fecha !== hoy()) { S.sesion = null; LS.del('sesion'); return irA(pantallaLogin); }
   irA(pantallaInicio);
 }
-arrancar();
+arrancar().then(actualizarPendientes).then(() => { if (S.pendientes.length) enviarCola(); });
+
+// Envío automático: al recuperar la señal y, por si acaso, cada minuto si hay pendientes.
+window.addEventListener('online', () => enviarCola().then((r) => {
+  if (r.enviadas) { toast(`Señal recuperada: ${r.enviadas} ${r.enviadas === 1 ? 'visita enviada' : 'visitas enviadas'} ✓`); if (PANTALLA === pantallaInicio) cargarResumen(); }
+}));
+window.addEventListener('offline', pintarPendientes);
+setInterval(() => { if (S.pendientes.length && navigator.onLine) enviarCola(); }, 60000);
 
 // Service worker: guarda la app en el teléfono para que abra rápido y sin señal.
 if ('serviceWorker' in navigator) {
