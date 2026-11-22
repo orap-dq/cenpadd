@@ -1,130 +1,1055 @@
 <!DOCTYPE html>
 <html lang="es-MX">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>CENPADD</title>
+<!--
+  CENPADD · APP DEL CENSO (PWA para celular Android) · versión 2
+  Censo Parroquial Digital Diocesano · Diócesis de Querétaro · ORAP
 
-  <!-- Pieza 1 de la PWA: el manifiesto (la "credencial" de la app) -->
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#5bc5d0">
-  <link rel="icon" href="icon-192.png">
-  <link rel="apple-touch-icon" href="icon-192.png">
+  Se publica en GitHub Pages (https://orap-dq.github.io/cenpadd/) y es la MISMA
+  app para todas las parroquias. La primera vez el encuestador elige su parroquia
+  (proyectos "En curso" en CENPADD Central); después entra con su nombre y su PIN.
 
-  <style>
-    :root {
-      --verde: #8dc63f;
-      --cian:  #5bc5d0;
-      --gris:  #808285;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-      background: #fff;
-      color: #333;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 24px;
-      text-align: center;
-    }
-    img.logo { width: 180px; max-width: 60vw; height: auto; }
-    h1 { margin: 20px 0 4px; font-size: 1.6rem; color: var(--gris); }
-    p.sub { margin: 0 0 24px; color: var(--gris); }
+  Cómo habla con CENPADD Central:
+    servidor('censoEntrar', codigo, pin)  → manda un POST a la URL /exec (URL_API)
+    con { accion, clave del proyecto, args } y recibe { ok, data } o { ok:false, error }.
 
-    .estado {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 8px 16px; border-radius: 999px;
-      font-weight: 600; font-size: .95rem;
-    }
-    .estado::before {
-      content: ""; width: 10px; height: 10px; border-radius: 50%;
-      background: currentColor;
-    }
-    .en-linea   { background: #eef7e2; color: #4c8a12; }
-    .sin-senal  { background: #fdeaea; color: #b3261e; }
+  Siempre con internet (por ahora). Si falla el envío, la ficha NO se pierde:
+  queda guardada en el teléfono y se puede volver a intentar.
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>CENPADD – Censo</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1f3a5f">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+  /* ===== Colores (mismos que Gestión) ===== */
+  :root {
+    --azul: #1f3a5f; --azul-claro: #e3ecf7; --fondo: #f3f5f8; --borde: #d0d7e0; --texto: #1b2430;
+    --suave: #5b6675; --rojo: #b3261e; --verde: #1e7a3c; --ambar: #8a5300;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--fondo); color: var(--texto);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 16px; }
 
-    button {
-      margin-top: 24px;
-      padding: 14px 28px;
-      font-size: 1rem; font-weight: 600;
-      color: #fff; background: var(--verde);
-      border: 0; border-radius: 12px;
-      cursor: pointer;
-    }
-    button[hidden] { display: none; }
+  /* ===== Logo oficial de CENPADD: completo en la portada, ícono en la barra ===== */
+  .logo { display: inline-block; background: url("logo.png") center/contain no-repeat; }
 
-    footer { margin-top: 32px; font-size: .8rem; color: #aaa; }
-  </style>
+  /* ===== Barra superior ===== */
+  header { position: sticky; top: 0; z-index: 5; background: var(--azul); color: #fff;
+    padding: 10px 14px; display: flex; align-items: center; gap: 10px; }
+  header .logo { width: 40px; height: 40px; border-radius: 50%; flex: none;
+    background: #fff url("icon-192.png") center/100% no-repeat; }
+  #tituloApp { font-weight: 700; font-size: 17px; letter-spacing: 1.5px; }
+  #subtitulo { font-size: 12.5px; opacity: .85; line-height: 1.3; }
+
+  main { padding: 14px 14px 110px; max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 4px 0 12px; color: var(--azul); }
+  h2 { font-size: 17px; margin: 18px 0 8px; color: var(--azul); }
+  .tarjeta { background: #fff; border: 1px solid var(--borde); border-radius: 12px; padding: 14px; margin-bottom: 12px; }
+  .centro { text-align: center; }
+  .suave { color: var(--suave); }
+  .peq { font-size: 13px; }
+
+  /* ===== Botones grandes, cómodos para el dedo ===== */
+  .btn { display: block; width: 100%; border: 0; border-radius: 10px; padding: 14px; font-size: 16px; font-weight: 600;
+    background: var(--azul); color: #fff; margin: 8px 0; cursor: pointer; font-family: inherit; }
+  .btn.sec { background: #fff; color: var(--azul); border: 1.5px solid var(--azul); }
+  .btn.peligro { background: #fff; color: var(--rojo); border: 1.5px solid var(--rojo); }
+  .btn.verde { background: var(--verde); }
+  .btn.chico { display: inline-block; width: auto; padding: 8px 12px; font-size: 14px; margin: 4px 4px 4px 0; }
+  .btn:disabled { opacity: .5; }
+  .btn .peq { font-weight: 400; }
+  .fila { display: flex; gap: 8px; }
+  .fila > * { flex: 1; }
+
+  /* ===== Campos del formulario ===== */
+  .campo { margin-bottom: 16px; }
+  .campo[hidden] { display: none; }
+  .etq { display: block; font-weight: 600; margin-bottom: 6px; }
+  .req { color: var(--rojo); }
+  .ayuda { font-size: 13px; color: var(--suave); margin: -2px 0 6px; }
+  input[type=text], input[type=tel], input[type=email], input[type=number], input[type=password], select, textarea {
+    width: 100%; font-size: 16px; padding: 12px; border: 1px solid var(--borde); border-radius: 8px;
+    background: #fff; color: var(--texto); font-family: inherit; }
+  textarea { resize: vertical; }
+  .opciones { display: flex; flex-wrap: wrap; gap: 6px; }
+  .op { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--borde); background: #fff;
+    border-radius: 20px; padding: 9px 14px; cursor: pointer; font-size: 15px; }
+  .op input { margin: 0; width: 18px; height: 18px; accent-color: var(--azul); }
+  .op:has(input:checked) { border-color: var(--azul); background: var(--azul-claro); }
+  .op.check { border-radius: 8px; width: 100%; }
+  .error { color: var(--rojo); font-size: 13px; margin-top: 4px; }
+  .campo.mal input, .campo.mal select, .campo.mal textarea, .campo.mal .opciones {
+    outline: 2px solid var(--rojo); outline-offset: 2px; border-radius: 8px; }
+
+  .gps { border: 1px dashed var(--borde); border-radius: 10px; padding: 12px; background: #fff; }
+  .gps .estado { font-weight: 600; }
+  .gps.bien { border-color: var(--verde); }
+  .gps.bien .estado { color: var(--verde); }
+  .gps.mal .estado { color: var(--ambar); }
+  .aviso { background: #fff8e6; border: 1px solid #f0d9a0; border-radius: 10px; padding: 12px; font-size: 14px; margin-bottom: 12px; }
+  .alerta { background: #fbeaea; border: 1px solid #efb8b4; border-radius: 10px; padding: 12px; font-size: 14px; margin-bottom: 12px; }
+  .miembro { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .miembro b { display: block; }
+  .contador { font-size: 40px; font-weight: 800; line-height: 1; color: var(--azul); }
+  .lista-reg { list-style: none; padding: 0; margin: 8px 0 0; }
+  .lista-reg li { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--fondo); font-size: 14px; }
+  .pie { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; border-top: 1px solid var(--borde); padding: 8px 14px; z-index: 4; }
+  .pie .fila { max-width: 640px; margin: 0 auto; }
+  .pie .btn { margin: 0; }
+  .foto img { max-width: 100%; border-radius: 8px; margin-top: 8px; }
+  .pasos { display: flex; gap: 4px; margin-bottom: 12px; }
+  .pasos span { flex: 1; height: 5px; border-radius: 3px; background: var(--borde); }
+  .pasos span.si { background: var(--azul); }
+
+  /* Pantalla de entrada: logo grande */
+  .portada { text-align: center; margin: 8px 0 14px; }
+  .portada .logo { width: 110px; height: 150px; display: block; margin: 0 auto 6px; }
+  .portada .lema { font-size: 13px; color: var(--suave); margin: 0; }
+
+  /* Mensajes breves y ventana de confirmación propia */
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 90px; background: #222; color: #fff;
+    padding: 10px 16px; border-radius: 8px; z-index: 20; max-width: 90%; font-size: 14px; text-align: center; }
+  #toast.error { background: var(--rojo); }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 30; }
+  #modal[hidden] { display: none; }
+  #modal .caja { background: #fff; border-radius: 12px; padding: 18px; width: 100%; max-width: 420px; }
+  #modal p { margin: 0 0 10px; }
+  #espera { position: fixed; inset: 0; background: rgba(255,255,255,.7); display: flex; align-items: center; justify-content: center;
+    z-index: 25; font-weight: 600; color: var(--azul); font-size: 17px; }
+  #espera[hidden] { display: none; }
+</style>
 </head>
 <body>
+<header>
+  <span class="logo" role="img" aria-label="Emblema de CENPADD"></span>
+  <div>
+    <div id="tituloApp">CENPADD</div>
+    <div id="subtitulo">Censo Parroquial Digital Diocesano</div>
+  </div>
+</header>
+<main id="app"><p class="centro suave">Cargando…</p></main>
+<div id="toast" hidden></div>
+<div id="espera" hidden>Enviando…</div>
+<div id="modal" hidden><div class="caja"><p id="modalTexto"></p>
+  <div class="fila"><button class="btn sec" id="modalNo">Cancelar</button><button class="btn" id="modalSi">Aceptar</button></div></div></div>
 
-  <img class="logo" src="logo.png" alt="Logo ORAP CENPADD">
-  <h1>¡Hola, CENPADD!</h1>
-  <p class="sub">Censo Parroquial Digital Diocesano</p>
+<script>
+'use strict';
+const VERSION = 'PWA 2.0';
 
-  <!-- Indicador de conexión -->
-  <div id="estado" class="estado en-linea">En línea</div>
+// Dirección de CENPADD Central (Implementar → Aplicación web → URL que termina en /exec).
+const URL_API = 'https://script.google.com/macros/s/AKfycbxWRdSUn45l2AIjOAEcErQZP-SniOmd7L_nG8A6sT73l9QFjiz-3fX7jNOj9IFitmE3/exec';
 
-  <!-- Botón de instalar: solo aparece si Chrome lo permite -->
-  <button id="btnInstalar" hidden>Instalar app</button>
+// ===========================================================================
+// 1) LISTAS DE OPCIONES (las mismas del formato de censo que definimos)
+// ===========================================================================
+const L = {
+  parentesco: ['Papá', 'Mamá', 'Hijo(a)', 'Hermano(a)', 'Abuelo(a)', 'Otro pariente', 'No pariente'],
+  sexo: ['Masculino', 'Femenino'],
+  sino: ['Sí', 'No'],
+  escolaridad: ['Ninguna', 'Preescolar', 'Primaria', 'Secundaria', 'Bachillerato', 'Carrera técnica', 'Licenciatura', 'Posgrado'],
+  ocupacion: ['Estudiante', 'Empleado(a)', 'Obrero(a)', 'Comerciante o por cuenta propia', 'Campesino o jornalero',
+    'Profesionista', 'Labores del hogar', 'Jubilado o pensionado', 'Desempleado(a)', 'Ninguna', 'Otra'],
+  tipoMigrante: ['Nacional', 'Extranjero'],
+  regularizado: ['Sí', 'No', 'Prefiere no responder'],
+  estadoCivil: ['Soltero(a)', 'Casado(a) civil', 'Casado(a) solo por la Iglesia', 'Unión libre', 'Divorciado(a)',
+    'Divorciado(a) vuelto(a) a casar', 'Separado(a)', 'Viudo(a)'],
+  religion: ['Católica', 'Testigo de Jehová', 'Evangelista', 'Pentecostal', 'Iglesia de Querétaro', 'Adventista', 'Mormón', 'Ninguna', 'Otra'],
+  sacramentos: ['Bautismo', 'Primera Comunión', 'Confirmación', 'Matrimonio'],
+  misa: ['Los domingos', 'Domingos y al menos una vez entre semana', 'Ocasional', 'Nunca'],
+  catequesis: ['Infantil', 'Juvenil'],
+  comunidad: ['SINE', 'MFC', 'Neocatecumenado', 'Círculos Bíblicos', 'Renovación Carismática', 'CEB', 'Opción Diócesis', 'Otro'],
+  tenencia: ['Propia', 'Rentada', 'Prestada', 'Otra'],
+  vivienda: ['Casa sobre calle', 'Departamento', 'Casa en privada o condominio', 'Otro']
+};
+const SOLTEROS = ['Soltero(a)', 'Divorciado(a)', 'Separado(a)', 'Viudo(a)'];
+const GPS_MAX = 30;   // precisión mínima aceptada, en metros
 
-  <footer>ORAP · Diócesis de Querétaro · versión de prueba 1</footer>
+// ===========================================================================
+// 2) ESTADO GENERAL DEL PROGRAMA
+// ===========================================================================
+const S = {
+  proyecto: null,   // clave del proyecto (parroquia) elegido: 1_1-Nov2026
+  proyectos: null,  // lista de parroquias con censo en curso (pantalla de elección)
+  proyErr: false,   // true si no se pudo descargar esa lista
+  config: null,     // lo que manda censoDatosIniciales: parroquia, equipo, sectores
+  sesion: null,     // {codigo, nombre, token, fecha} — lo devuelve censoEntrar
+  borrador: null,   // la visita que se está capturando
+  ultimos: {}       // última colonia/calle/sector, para no reescribirlos en cada casa
+};
 
-  <script>
-    // ---------------------------------------------------------
-    // Pieza 2 de la PWA: registrar el service worker (sw.js)
-    // ---------------------------------------------------------
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js')
-        .then(() => console.log('Service worker registrado'))
-        .catch((err) => console.error('Error al registrar el service worker:', err));
-    }
+// ===========================================================================
+// 3) UTILIDADES
+// ===========================================================================
+const $ = (sel) => document.querySelector(sel);
+// esc() evita que un texto escrito por el usuario se interprete como HTML.
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const dos = (n) => String(n).padStart(2, '0');
+function hoy() { const d = new Date(); return `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}`; }
+function ahora() { const d = new Date(); return `${hoy()} ${dos(d.getHours())}:${dos(d.getMinutes())}:${dos(d.getSeconds())}`; }
+// Identificador único de cada visita. Sirve para que el servidor no la guarde dos veces
+// si el encuestador toca "Guardar" de nuevo después de un error de red.
+function uuid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16);
+  });
+}
 
-    // ---------------------------------------------------------
-    // Indicador "En línea" / "Sin señal"
-    // ---------------------------------------------------------
-    const estado = document.getElementById('estado');
-    function actualizarEstado() {
-      if (navigator.onLine) {
-        estado.textContent = 'En línea';
-        estado.className = 'estado en-linea';
-      } else {
-        estado.textContent = 'Sin señal (la app sigue funcionando)';
-        estado.className = 'estado sin-senal';
-      }
-    }
-    window.addEventListener('online', actualizarEstado);
-    window.addEventListener('offline', actualizarEstado);
-    actualizarEstado();
+let toastTimer = null;
+function toast(msg, ms = 3500, error = false) {
+  const t = $('#toast'); t.textContent = msg; t.hidden = false; t.classList.toggle('error', error);
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+}
 
-    // ---------------------------------------------------------
-    // Botón "Instalar app"
-    // Chrome avisa cuando la página se puede instalar; guardamos
-    // ese aviso y mostramos nuestro propio botón.
-    // ---------------------------------------------------------
-    let avisoInstalar = null;
-    const btn = document.getElementById('btnInstalar');
+// Ventana "¿Seguro?" propia. Devuelve una promesa: true si toca Aceptar.
+function preguntar(texto, si = 'Aceptar') {
+  return new Promise((res) => {
+    $('#modalTexto').textContent = texto; $('#modalSi').textContent = si; $('#modal').hidden = false;
+    const cerrar = (v) => { $('#modal').hidden = true; $('#modalSi').onclick = $('#modalNo').onclick = null; res(v); };
+    $('#modalSi').onclick = () => cerrar(true);
+    $('#modalNo').onclick = () => cerrar(false);
+  });
+}
 
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      avisoInstalar = e;
-      btn.hidden = false;
+// --- Memoria del teléfono (localStorage) ---
+// Guardamos aquí la parroquia elegida, la sesión del día y la visita en curso.
+// Así, si el encuestador cierra la app a mitad de una encuesta, no pierde lo capturado.
+const LS = {
+  get(k) { try { const v = localStorage.getItem('cenpadd_' + k); return v ? JSON.parse(v) : null; } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem('cenpadd_' + k, JSON.stringify(v)); } catch (e) { /* sin memoria local */ } },
+  del(k) { try { localStorage.removeItem('cenpadd_' + k); } catch (e) { /* nada */ } }
+};
+let borradorTimer = null;
+function guardarBorradorPronto() {
+  clearTimeout(borradorTimer);
+  borradorTimer = setTimeout(() => { if (S.borrador) LS.set('borrador', S.borrador); }, 300);
+}
+
+// --- Llamar a CENPADD Central y esperar su respuesta ---
+// Ejemplo: const r = await servidor('censoEntrar', '02', '1234');
+// Se manda como "text/plain" para que el navegador no tenga que pedir permiso
+// previo (CORS) a Google: así funciona desde GitHub Pages.
+async function servidor(accion, ...args) {
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(URL_API)) {
+    throw new Error('La app no tiene configurada la dirección de CENPADD Central (URL_API).');
+  }
+  let resp;
+  try {
+    resp = await fetch(URL_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ accion, clave: S.proyecto, args })
     });
+  } catch (e) {
+    throw new Error('Failed to fetch: sin conexión con el servidor');
+  }
+  if (!resp.ok) throw new Error('El servidor respondió con un error (' + resp.status + ').');
+  const r = await resp.json();
+  if (!r.ok) throw new Error(r.error || 'Respuesta no válida del servidor.');
+  return r.data;
+}
 
-    btn.addEventListener('click', async () => {
-      if (!avisoInstalar) return;
-      avisoInstalar.prompt();
-      await avisoInstalar.userChoice;
-      avisoInstalar = null;
-      btn.hidden = true;
-    });
+// Traduce un error del servidor a un mensaje claro y decide qué hacer.
+function manejarError(e, queHacia) {
+  const m = String(e && e.message || e);
+  if (m.indexOf('SESION:') >= 0) {
+    // El token ya no vale (cambió el día, cambió el PIN o lo desactivaron).
+    // La visita en curso se conserva en el teléfono.
+    S.sesion = null; LS.del('sesion');
+    toast('Tu sesión terminó. Vuelve a entrar con tu PIN; lo capturado sigue guardado.', 6000, true);
+    irA(pantallaLogin);
+    return;
+  }
+  const red = /network|red|conexi|failed to fetch|http 0/i.test(m);
+  toast(red ? `Sin conexión: no se pudo ${queHacia}. Revisa tu internet y vuelve a intentar.`
+            : `No se pudo ${queHacia}: ${m.replace(/^Error:\s*/, '')}`, 7000, true);
+}
 
-    // Si ya se instaló, ocultamos el botón
-    window.addEventListener('appinstalled', () => { btn.hidden = true; });
-  </script>
+// ===========================================================================
+// 4) SECTORES (vienen de la pestaña Sectores que llenó Gestión)
+// ===========================================================================
+function sectoresUnicos() {
+  const vistos = [];
+  (S.config?.sectores || []).forEach((s) => { if (!vistos.includes(s.sector)) vistos.push(s.sector); });
+  return vistos.sort((a, b) => Number(a) - Number(b));
+}
+function subsectoresDe(sector) {
+  return (S.config?.sectores || []).filter((s) => s.sector === sector && s.subsector).map((s) => s.subsector);
+}
+
+// ===========================================================================
+// 5) DEFINICIÓN DE LAS PREGUNTAS
+//    Cada pregunta es un objeto:
+//      id   → nombre del dato         l    → texto que se ve
+//      t    → tipo (text, select, radio, multi, check, gps, foto…)
+//      req  → obligatoria             op   → opciones
+//      si   → función que decide si la pregunta se muestra (preguntas condicionales)
+// ===========================================================================
+const CAMPOS_DOMICILIO = [
+  { id: 'sector', l: 'Sector', t: 'select', req: true, op: () => sectoresUnicos(), rerender: true },
+  { id: 'subsector', l: 'Subsector', t: 'select', req: true, op: (d) => subsectoresDe(d.sector), si: (d) => subsectoresDe(d.sector).length > 0 },
+  { id: 'colonia', l: 'Colonia', t: 'text', req: true },
+  { id: 'calle', l: 'Calle', t: 'text', req: true },
+  { id: 'numExt', l: 'Número exterior', t: 'text', req: true, ayuda: 'Escribe S/N si no tiene número.' },
+  { id: 'numInt', l: 'Número interior', t: 'text' }
+];
+
+// Texto que el encuestador lee a la familia. DEBE revisarlo la instancia jurídica de la diócesis.
+function avisoPrivacidad() {
+  const p = esc(S.config?.parroquia || 'la Parroquia');
+  return `<div class="aviso"><b>Aviso de privacidad (leer a la familia)</b><br>
+  La ${p}, de la Diócesis de Querétaro, recaba estos datos con fines exclusivamente pastorales:
+  conocer la realidad de la comunidad y ofrecer atención y acompañamiento. Algunos datos, como la religión
+  y la práctica religiosa, son datos sensibles; no se compartirán con terceros. Puede no responder cualquier
+  pregunta. El aviso de privacidad completo está disponible en la parroquia.</div>`;
+}
+
+// Tipo de vivienda: se pregunta en la ficha y también en las visitas no logradas.
+const CAMPO_VIVIENDA = { id: 'tipoVivienda', l: 'Tipo de vivienda', t: 'radio', req: true, op: L.vivienda };
+const CAMPO_VIVIENDA_OTRO = { id: 'tipoViviendaOtra', l: 'Especificar tipo de vivienda', t: 'text', req: true, si: (d) => d.tipoVivienda === 'Otro' };
+
+const CAMPOS_FAMILIA = [
+  { id: 'aviso', t: 'html', html: avisoPrivacidad },
+  { id: 'consentimiento', l: 'Consentimiento', t: 'check', req: true, texto: 'La familia escuchó el aviso y acepta participar' },
+  CAMPOS_DOMICILIO[0], CAMPOS_DOMICILIO[1],
+  { id: 'familia', l: 'Familia (dos apellidos)', t: 'text', req: true, ayuda: 'Ejemplo: Hernández López' },
+  CAMPOS_DOMICILIO[2], CAMPOS_DOMICILIO[3], CAMPOS_DOMICILIO[4], CAMPOS_DOMICILIO[5],
+  CAMPO_VIVIENDA, CAMPO_VIVIENDA_OTRO,
+  { id: 'gps', l: 'Ubicación GPS', t: 'gps', req: true },
+  { id: 'tenencia', l: 'La vivienda es…', t: 'radio', req: true, op: L.tenencia },
+  { id: 'tenenciaOtra', l: 'Especificar', t: 'text', req: true, si: (d) => d.tenencia === 'Otra' },
+  { id: 'telefono', l: 'Teléfono', t: 'tel', ayuda: '10 dígitos (opcional)' },
+  { id: 'email', l: 'Correo electrónico', t: 'email', ayuda: 'Opcional' }
+];
+
+const CAMPOS_NO_LOGRADA = [
+  ...CAMPOS_DOMICILIO,
+  CAMPO_VIVIENDA, CAMPO_VIVIENDA_OTRO,
+  { id: 'gps', l: 'Ubicación GPS', t: 'gps', req: true },
+  { id: 'foto', l: 'Foto de la fachada', t: 'foto', ayuda: 'Opcional' }
+];
+
+const esCatolico = (d) => d.religion === 'Católica';
+
+const CAMPOS_MIEMBRO = [
+  { id: 'parentesco', l: 'Parentesco', t: 'radio', req: true, op: L.parentesco },
+  { id: 'parentescoEsp', l: 'Especificar parentesco o relación', t: 'text', req: true, si: (d) => d.parentesco === 'Otro pariente' || d.parentesco === 'No pariente', ayuda: 'Ej.: sobrino, nuera, amigo…' },
+  { id: 'edad', l: 'Edad (años cumplidos)', t: 'number', req: true, min: 0, max: 110, ayuda: 'Menores de un año: 0' },
+  { id: 'sexo', l: 'Sexo', t: 'radio', req: true, op: L.sexo },
+  { id: 'escolaridad', l: 'Escolaridad', t: 'select', req: true, op: L.escolaridad, ayuda: 'Último nivel cursado o en curso' },
+  { id: 'ocupacion', l: 'Ocupación', t: 'select', req: true, op: L.ocupacion },
+  { id: 'ocupacionOtra', l: 'Especificar ocupación', t: 'text', req: true, si: (d) => d.ocupacion === 'Otra' },
+  { id: 'migrante', l: '¿Es migrante?', t: 'radio', req: true, op: L.sino },
+  { id: 'tipoMigrante', l: 'Tipo de migrante', t: 'radio', req: true, op: L.tipoMigrante, si: (d) => d.migrante === 'Sí' },
+  { id: 'procedencia', l: 'Procedencia (estado o país)', t: 'text', req: true, si: (d) => d.migrante === 'Sí' },
+  { id: 'regularizado', l: '¿Situación migratoria regularizada?', t: 'radio', req: true, op: L.regularizado, si: (d) => d.migrante === 'Sí' && d.tipoMigrante === 'Extranjero' },
+  { id: 'estadoCivil', l: 'Estado civil', t: 'select', req: true, op: L.estadoCivil },
+  {
+    id: 'madrePadreSoltero', t: 'radio', req: true, op: L.sino, si: (d) => SOLTEROS.includes(d.estadoCivil),
+    l: (d) => d.sexo === 'Femenino' ? '¿Es madre soltera?' : d.sexo === 'Masculino' ? '¿Es padre soltero?' : '¿Es madre o padre soltero(a)?'
+  },
+  { id: 'enfermedad', l: '¿Tiene alguna enfermedad?', t: 'radio', req: true, op: L.sino },
+  { id: 'enfermedadEsp', l: 'Especificar enfermedad', t: 'text', si: (d) => d.enfermedad === 'Sí', ayuda: 'Opcional' },
+  { id: 'visitaSalud', t: 'check', texto: 'Programar visita (salud)', si: (d) => d.enfermedad === 'Sí' },
+  { id: 'religion', l: 'Religión', t: 'select', req: true, op: L.religion },
+  { id: 'religionOtra', l: 'Especificar religión', t: 'text', req: true, si: (d) => d.religion === 'Otra' },
+  // --- Vida cristiana: solo aparece si la persona es católica ---
+  { id: 'tituloCristiana', t: 'html', html: () => '<h2>Vida cristiana</h2>', si: esCatolico },
+  { id: 'sacramentos', l: 'Sacramentos recibidos', t: 'multi', op: L.sacramentos, si: esCatolico, ayuda: 'Marca todos los que haya recibido. Si no marca ninguno, se registra "Ninguno".' },
+  { id: 'visitaSacramentos', t: 'check', texto: 'Programar visita (sacramentos)', si: esCatolico },
+  { id: 'misa', l: '¿Va a Misa?', t: 'radio', req: true, op: L.misa, si: esCatolico },
+  { id: 'catequesis', l: 'Catequesis', t: 'multi', op: L.catequesis, si: esCatolico, ayuda: 'Opcional' },
+  { id: 'pequenaComunidad', l: 'Opción de pequeña comunidad', t: 'select', op: L.comunidad, si: esCatolico, ayuda: 'Opcional' },
+  { id: 'pequenaComunidadOtra', l: 'Especificar comunidad', t: 'text', req: true, si: (d) => esCatolico(d) && d.pequenaComunidad === 'Otro' }
+];
+
+function camposCierre(hayCatolico) {
+  const si = () => hayCatolico;   // las preguntas abiertas solo si hay al menos un católico
+  return [
+    { id: 'tituloAbiertas', t: 'html', html: () => '<h2>Preguntas abiertas</h2><p class="suave peq">Opcionales.</p>', si },
+    { id: 'p1', l: '¿Qué te gusta de la Parroquia?', t: 'textarea', si },
+    { id: 'p2', l: '¿Qué no te gusta de tu Parroquia?', t: 'textarea', si },
+    { id: 'p3', l: '¿Qué le pides a tu Parroquia?', t: 'textarea', si },
+    { id: 'p4', l: '¿Qué persona ha influido más en tu fe?', t: 'textarea', si },
+    { id: 'tituloVisita', t: 'html', html: () => '<h2>Visita</h2>' },
+    { id: 'visitaFamilia', t: 'check', texto: 'Programar visita a la familia' },
+    { id: 'motivoVisita', l: 'Motivo de la visita', t: 'text', req: true, si: (d) => d.visitaFamilia === true },
+    { id: 'observaciones', l: 'Observaciones', t: 'textarea' }
+  ];
+}
+
+// ===========================================================================
+// 6) MOTOR DE FORMULARIOS: dibuja las preguntas, lee respuestas y valida
+// ===========================================================================
+let FORM = null;   // {defs: lista de preguntas, datos: respuestas}
+
+function opcionesDe(f, d) { return typeof f.op === 'function' ? f.op(d) : (f.op || []); }
+function etiquetaDe(f, d) { return typeof f.l === 'function' ? f.l(d) : (f.l || ''); }
+function visible(f, d) { return !f.si || f.si(d); }
+function vacio(v) { return v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length); }
+
+function htmlCampo(f, d) {
+  const v = d[f.id];
+  const oculto = visible(f, d) ? '' : ' hidden';
+  if (f.t === 'html') return `<div class="campo" data-campo="${f.id}"${oculto}>${f.html(d)}</div>`;
+  const req = f.req ? ' <span class="req">*</span>' : '';
+  const etq = f.t === 'check' ? '' : `<span class="etq"><span class="etq-txt">${esc(etiquetaDe(f, d))}</span>${req}</span>`;
+  const ayuda = f.ayuda ? `<div class="ayuda">${esc(f.ayuda)}</div>` : '';
+  let input = '';
+  switch (f.t) {
+    case 'text': case 'email':
+      input = `<input type="${f.t}" name="${f.id}" value="${esc(v)}" autocomplete="off" autocapitalize="${f.t === 'email' ? 'off' : 'words'}">`; break;
+    case 'tel':
+      input = `<input type="tel" name="${f.id}" value="${esc(v)}" inputmode="numeric" maxlength="10" autocomplete="off">`; break;
+    case 'number':
+      input = `<input type="number" name="${f.id}" value="${esc(v)}" inputmode="numeric" min="${f.min ?? ''}" max="${f.max ?? ''}">`; break;
+    case 'textarea':
+      input = `<textarea name="${f.id}" rows="3">${esc(v)}</textarea>`; break;
+    case 'select':
+      input = `<select name="${f.id}"><option value="">— Elige —</option>${opcionesDe(f, d).map((o) =>
+        `<option${o === v ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`; break;
+    case 'radio':
+      input = `<div class="opciones">${opcionesDe(f, d).map((o) =>
+        `<label class="op"><input type="radio" name="${f.id}" value="${esc(o)}"${o === v ? ' checked' : ''}><span>${esc(o)}</span></label>`).join('')}</div>`; break;
+    case 'multi':
+      input = `<div class="opciones">${opcionesDe(f, d).map((o) =>
+        `<label class="op"><input type="checkbox" name="${f.id}" value="${esc(o)}"${(v || []).includes(o) ? ' checked' : ''}><span>${esc(o)}</span></label>`).join('')}</div>`; break;
+    case 'check':
+      input = `<label class="op check"><input type="checkbox" name="${f.id}"${v ? ' checked' : ''}><span>${esc(f.texto)}</span></label>`; break;
+    case 'gps':
+      input = `<div class="gps" id="gpsCaja"><div class="estado" id="gpsEstado"></div><div class="peq suave" id="gpsDetalle"></div>
+        <button type="button" class="btn chico sec" data-accion="gps-reintentar">Volver a tomar ubicación</button></div>`; break;
+    case 'foto':
+      // capture="environment" abre directamente la cámara trasera del celular.
+      input = `<div class="foto"><input type="file" accept="image/*" capture="environment" data-foto>
+        ${v ? `<img src="${v}" alt="Foto de la fachada"><button type="button" class="btn chico peligro" data-accion="quitar-foto">Quitar foto</button>` : ''}</div>`; break;
+  }
+  return `<div class="campo" data-campo="${f.id}"${oculto}>${etq}${ayuda}${input}<div class="error" hidden></div></div>`;
+}
+
+function htmlForm(defs, d) { return defs.map((f) => htmlCampo(f, d)).join(''); }
+
+// Lee del formulario el valor actual de una pregunta.
+function valorDOM(f) {
+  const els = [...document.querySelectorAll(`#app [name="${f.id}"]`)];
+  if (!els.length) return undefined;
+  switch (f.t) {
+    case 'radio': { const c = els.find((e) => e.checked); return c ? c.value : ''; }
+    case 'multi': return els.filter((e) => e.checked).map((e) => e.value);
+    case 'check': return els[0].checked;
+    case 'number': return els[0].value === '' ? '' : Number(els[0].value);
+    default: return els[0].value;
+  }
+}
+
+// Muestra u oculta las preguntas condicionales según las respuestas.
+function refrescarVisibles() {
+  if (!FORM) return;
+  const d = FORM.datos;
+  FORM.defs.forEach((f) => {
+    const el = document.querySelector(`#app [data-campo="${f.id}"]`);
+    if (!el) return;
+    el.hidden = !visible(f, d);
+    if (typeof f.l === 'function') { const t = el.querySelector('.etq-txt'); if (t) t.textContent = etiquetaDe(f, d); }
+  });
+}
+
+// Copia limpia: las preguntas ocultas se vacían y los textos se recortan.
+function limpio(defs, datos) {
+  const out = {};
+  defs.forEach((f) => {
+    if (f.t === 'html') return;
+    let v = datos[f.id];
+    if (!visible(f, out)) v = f.t === 'multi' ? [] : f.t === 'check' ? false : '';
+    if (typeof v === 'string') v = v.trim();
+    if (v === undefined) v = f.t === 'multi' ? [] : f.t === 'check' ? false : '';
+    out[f.id] = v;
+  });
+  return out;
+}
+
+// Revisa obligatorias y formatos. Devuelve los datos limpios, o null si hay errores.
+function validar(defs, datos) {
+  const d = limpio(defs, datos);
+  const errores = {};
+  defs.forEach((f) => {
+    if (f.t === 'html' || !visible(f, d)) return;
+    const v = d[f.id];
+    if (f.t === 'gps') {
+      if (f.req && !(v && v.precision <= GPS_MAX)) errores[f.id] = `Falta la ubicación con precisión de ${GPS_MAX} m o menos.`;
+      return;
+    }
+    if (f.req && (f.t === 'check' ? v !== true : vacio(v))) { errores[f.id] = 'Este dato es obligatorio.'; return; }
+    if (vacio(v)) return;
+    if (f.t === 'number' && ((f.min != null && v < f.min) || (f.max != null && v > f.max) || !Number.isInteger(v))) errores[f.id] = `Escribe un número entero entre ${f.min} y ${f.max}.`;
+    if (f.t === 'tel' && !/^\d{10}$/.test(v)) errores[f.id] = 'El teléfono debe tener 10 dígitos.';
+    if (f.t === 'email' && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) errores[f.id] = 'El correo no es válido.';
+  });
+  document.querySelectorAll('#app .campo').forEach((c) => {
+    const id = c.getAttribute('data-campo');
+    const err = c.querySelector('.error');
+    c.classList.toggle('mal', !!errores[id]);
+    if (err) { err.hidden = !errores[id]; err.textContent = errores[id] || ''; }
+  });
+  const primero = Object.keys(errores)[0];
+  if (primero) {
+    const el = document.querySelector(`#app [data-campo="${primero}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    toast('Revisa los datos marcados en rojo.');
+    return null;
+  }
+  return d;
+}
+
+function alCambiarCampo(e) {
+  if (!FORM) return;
+  const f = FORM.defs.find((x) => x.id === e.target.name);
+  if (!f) return;
+  FORM.datos[f.id] = valorDOM(f);
+  const c = e.target.closest('.campo');
+  if (c && c.classList.contains('mal')) { c.classList.remove('mal'); const er = c.querySelector('.error'); if (er) er.hidden = true; }
+  // Al cambiar de sector hay que redibujar para mostrar sus subsectores.
+  if (f.rerender && e.type === 'change') { if (f.id === 'sector') FORM.datos.subsector = ''; render(); return; }
+  refrescarVisibles();
+  guardarBorradorPronto();
+}
+
+// ===========================================================================
+// 7) GPS: se toma solo al abrir la pantalla y va mejorando la precisión
+// ===========================================================================
+const GPS = {
+  watch: null,
+  iniciar(reiniciar) {
+    if (!FORM || !FORM.defs.some((f) => f.t === 'gps')) return;
+    if (reiniciar) { FORM.datos.gps = null; guardarBorradorPronto(); }
+    this.detener();
+    pintarGps('Buscando ubicación…');
+    if (!navigator.geolocation) { pintarGps('Este teléfono no permite obtener la ubicación.'); return; }
+    this.watch = navigator.geolocation.watchPosition((p) => {
+      if (!FORM) return;
+      const c = { lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), precision: Math.round(p.coords.accuracy) };
+      const actual = FORM.datos.gps;
+      if (!actual || c.precision <= actual.precision) { FORM.datos.gps = c; guardarBorradorPronto(); }
+      pintarGps();
+      if (FORM.datos.gps.precision <= 10) this.detener();   // ya es muy buena, dejamos de buscar
+    }, (err) => {
+      const m = err.code === 1
+        ? 'Permiso de ubicación negado. Mantén presionado el ícono de CENPADD → Información de la app → Permisos → Ubicación → Permitir. Después toca "Volver a tomar ubicación".'
+        : 'No se pudo obtener la ubicación. Sal a un lugar abierto y vuelve a intentar.';
+      this.detener();
+      pintarGps(m);
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+  },
+  detener() { if (this.watch !== null && navigator.geolocation) navigator.geolocation.clearWatch(this.watch); this.watch = null; }
+};
+
+function pintarGps(msg) {
+  const caja = $('#gpsCaja'); if (!caja || !FORM) return;
+  const g = FORM.datos.gps;
+  const bien = g && g.precision <= GPS_MAX;
+  caja.classList.toggle('bien', !!bien);
+  caja.classList.toggle('mal', !!g && !bien);
+  $('#gpsEstado').textContent = g
+    ? (bien ? `✓ Ubicación tomada (precisión ${g.precision} m)` : `Precisión insuficiente: ${g.precision} m (se necesita ${GPS_MAX} m o menos)`)
+    : (msg || 'Sin ubicación');
+  $('#gpsDetalle').textContent = g ? `${g.lat}, ${g.lng}${GPS.watch !== null && !bien ? ' · mejorando…' : ''}` : '';
+  if (bien) { const c = caja.closest('.campo'); if (c) { c.classList.remove('mal'); const e = c.querySelector('.error'); if (e) e.hidden = true; } }
+}
+
+// ===========================================================================
+// 8) FOTO: se reduce a 1280 px y calidad 70 % para que suba rápido
+// ===========================================================================
+function comprimirFoto(file) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error('No se pudo leer la foto')); };
+    img.src = url;
+  });
+}
+
+// ===========================================================================
+// 9) NAVEGACIÓN ENTRE PANTALLAS
+//    Cada pantalla es una función que dibuja su HTML dentro de <main id="app">.
+// ===========================================================================
+let PANTALLA = null;
+function irA(fn) { GPS.detener(); FORM = null; PANTALLA = fn; render(); window.scrollTo(0, 0); }
+function render() {
+  const y = window.scrollY;
+  PANTALLA();
+  if (FORM && FORM.defs.some((f) => f.t === 'gps')) {
+    if (GPS.watch === null && !(FORM.datos.gps && FORM.datos.gps.precision <= GPS_MAX)) GPS.iniciar(false); else pintarGps();
+  }
+  window.scrollTo(0, y);
+}
+function pintar(html) { $('#app').innerHTML = html; }
+function encabezado() {
+  $('#subtitulo').textContent = S.sesion
+    ? `${S.sesion.codigo} · ${S.sesion.nombre}`
+    : (S.config ? S.config.parroquia : 'Censo Parroquial Digital Diocesano');
+}
+const PORTADA = `<div class="portada"><span class="logo" role="img" aria-label="Logo de CENPADD"></span>
+  <p class="lema">Censo Parroquial Digital Diocesano</p></div>`;
+
+// Muestra la capa "Enviando…" mientras esperamos al servidor.
+function esperando(si, texto = 'Enviando…') { $('#espera').textContent = texto; $('#espera').hidden = !si; }
+
+// ===========================================================================
+// 10) ELEGIR PARROQUIA (solo la primera vez; la app la recuerda)
+// ===========================================================================
+function pantallaParroquia() {
+  encabezado();
+  const lista = S.proyectos;
+  let cuerpo;
+  if (S.proyErr) {
+    cuerpo = `<div class="alerta"><b>No se pudo descargar la lista de parroquias.</b><br>Revisa tu conexión a internet.</div>`;
+  } else if (lista === null) {
+    cuerpo = '<p class="centro suave">Buscando parroquias con censo en curso…</p>';
+  } else if (!lista.length) {
+    cuerpo = '<div class="alerta">Ahora no hay ningún censo en curso. Consulta al coordinador de tu parroquia.</div>';
+  } else {
+    cuerpo = `<div class="tarjeta"><span class="etq">Elige tu parroquia</span>
+      ${lista.map((p) => `<button class="btn sec" data-accion="elegir-parroquia" data-clave="${esc(p.clave)}">
+        ${esc(p.parroquia)}<br><span class="peq">${esc(p.decanato)}</span></button>`).join('')}</div>`;
+  }
+  pintar(`${PORTADA}${cuerpo}
+    <button class="btn chico sec" data-accion="buscar-parroquias">Actualizar lista</button>
+    <p class="suave peq centro">Versión ${VERSION}</p>`);
+  if (lista === null && !S.proyErr) buscarParroquias();
+}
+
+async function buscarParroquias() {
+  try { S.proyectos = await servidor('censoProyectos'); S.proyErr = false; }
+  catch (e) { S.proyErr = true; manejarError(e, 'consultar las parroquias'); }
+  if (PANTALLA === pantallaParroquia) render();
+}
+
+async function elegirParroquia(clave) {
+  S.proyecto = clave; LS.set('proyecto', clave);
+  S.sesion = null; LS.del('sesion');
+  arrancar();
+}
+
+async function cambiarParroquia() {
+  if (S.borrador && !(await preguntar('Hay una visita sin terminar. Si cambias de parroquia se descartará. ¿Continuar?', 'Cambiar'))) return;
+  S.borrador = null; LS.del('borrador');
+  S.proyecto = null; LS.del('proyecto');
+  S.sesion = null; LS.del('sesion');
+  S.config = null; S.proyectos = null; S.proyErr = false; S.ultimos = {}; LS.del('ultimos');
+  irA(pantallaParroquia);
+}
+
+// ===========================================================================
+// 11) DATOS DEL PROYECTO Y ENTRADA DEL ENCUESTADOR
+// ===========================================================================
+async function cargarConfig() {
+  try {
+    S.config = await servidor('censoDatosIniciales');
+    return true;
+  } catch (e) {
+    const m = String(e.message || e);
+    // El proyecto ya no recibe datos (cerrado, aún no inicia o ya no existe).
+    const sinProyecto = /cerrado|no ha iniciado|No existe el proyecto/i.test(m);
+    pintar(`${PORTADA}<div class="alerta"><b>${sinProyecto ? esc(m.replace(/^Error:\s*/, ''))
+        : 'No se pudieron descargar los datos de la parroquia.'}</b><br>
+      ${sinProyecto ? 'Si te cambiaron de parroquia, elige la nueva.' : 'Revisa tu conexión a internet.'}</div>
+      ${sinProyecto ? '' : '<button class="btn" data-accion="reintentar-config">Reintentar</button>'}
+      <button class="btn sec" data-accion="cambiar-parroquia">Elegir otra parroquia</button>`);
+    return false;
+  }
+}
+
+function pantallaLogin() {
+  encabezado();
+  const equipo = S.config.equipo || [];
+  pintar(`${PORTADA}
+    <div class="tarjeta centro peq suave"><b style="color:var(--texto)">${esc(S.config.parroquia)}</b><br>${esc(S.config.decanato)}</div>
+    ${equipo.length ? `<div class="tarjeta">
+      <span class="etq">Encuestador</span>
+      <select id="loginEnc"><option value="">— Elige tu nombre —</option>
+        ${equipo.map((x) => `<option value="${esc(x.codigo)}">${esc(x.codigo + ' – ' + x.nombre)}</option>`).join('')}
+      </select>
+      <div style="height:12px"></div>
+      <span class="etq">PIN</span>
+      <input type="password" id="loginPin" inputmode="numeric" maxlength="8" autocomplete="off">
+      <button class="btn" data-accion="entrar">Entrar</button>
+    </div>` : `<div class="alerta">Todavía no hay encuestadores activos. El equipo ORAP debe darlos de alta en <b>Gestión → Equipo</b>.</div>`}
+    <div class="fila">
+      <button class="btn chico sec" data-accion="actualizar-config">Actualizar datos</button>
+      <button class="btn chico sec" data-accion="cambiar-parroquia">Cambiar parroquia</button>
+    </div>
+    <p class="suave peq centro">Versión ${VERSION}</p>`);
+}
+
+async function entrar() {
+  const codigo = $('#loginEnc').value, pin = $('#loginPin').value.trim();
+  if (!codigo || !pin) { toast('Elige tu nombre y escribe tu PIN.'); return; }
+  esperando(true, 'Comprobando…');
+  try {
+    // El servidor compara con el PIN registrado en Gestión y devuelve un "token" del día.
+    S.sesion = await servidor('censoEntrar', codigo, pin);
+    LS.set('sesion', S.sesion);
+    irA(pantallaInicio);
+  } catch (e) {
+    const m = String(e.message || e);
+    if (/PIN incorrecto|no autorizado/i.test(m)) toast(m.replace(/^Error:\s*/, ''), 4000, true);
+    else manejarError(e, 'entrar');
+  } finally { esperando(false); }
+}
+
+// ===========================================================================
+// 12) PANTALLA DE INICIO DEL DÍA
+// ===========================================================================
+function pantallaInicio() {
+  encabezado();
+  const b = S.borrador;
+  pintar(`
+    ${b ? `<div class="aviso"><b>Tienes una visita sin terminar</b>${b.datos && b.datos.familia ? ' (' + esc(b.datos.familia) + ')' : ''}.
+      <button class="btn" data-accion="continuar">Continuar</button></div>`
+        : `<button class="btn" data-accion="nueva">+ Nueva visita</button>`}
+    ${S.config.sectores.length ? '' : '<div class="alerta">La parroquia aún no tiene sectores registrados. Pide al equipo ORAP que los capture en Gestión → Sectores.</div>'}
+    <div class="tarjeta" id="resumenHoy"><span class="suave">Cargando lo que llevas hoy…</span></div>
+    <div class="fila">
+      <button class="btn chico sec" data-accion="actualizar-config">Actualizar datos</button>
+      <button class="btn chico sec" data-accion="salir">Cambiar encuestador</button>
+    </div>
+    <p class="suave peq centro">${esc(S.config.parroquia)} · Versión ${VERSION}</p>`);
+  cargarResumen();
+}
+
+async function cargarResumen() {
+  try {
+    const r = await servidor('censoResumenHoy', S.sesion);
+    if (PANTALLA !== pantallaInicio) return;
+    const n = r.fichas.length, nl = r.noLogradas.length;
+    $('#resumenHoy').innerHTML = `<div class="centro"><div class="contador">${n}</div>
+      <div>${n === 1 ? 'familia censada hoy' : 'familias censadas hoy'}</div>
+      <div class="peq suave">${nl} ${nl === 1 ? 'visita no lograda' : 'visitas no logradas'}</div></div>
+      <ul class="lista-reg">
+        ${r.fichas.map((f) => `<li><span>${esc(f.ficha)} · ${esc(f.familia)}</span><span class="peq" style="color:var(--verde)">✓</span></li>`).join('')}
+        ${r.noLogradas.map((v) => `<li><span class="suave">${esc(v.resultado)} · ${esc(v.domicilio)}</span></li>`).join('')}
+      </ul>`;
+  } catch (e) {
+    if (String(e.message).indexOf('SESION:') >= 0) return manejarError(e, 'consultar');
+    const el = $('#resumenHoy'); if (el) el.innerHTML = '<span class="suave">No se pudo consultar el resumen (¿sin internet?).</span>';
+  }
+}
+
+// ===========================================================================
+// 13) VISITAS: resultado → (familia → miembros → cierre) o (no lograda)
+// ===========================================================================
+function pantallaResultado() {
+  encabezado();
+  pintar(`<h1>Nueva visita</h1>
+  <p><b>¿Qué pasó al tocar en esta casa?</b></p>
+  <button class="btn verde" data-accion="res-realizada">Me atendieron y aceptan participar</button>
+  <button class="btn sec" data-accion="res-nadie">No hay nadie en casa</button>
+  <button class="btn sec" data-accion="res-noquiso">No quisieron participar</button>
+  <button class="btn peligro" data-accion="inicio" style="margin-top:24px">Cancelar</button>`);
+}
+
+// Para la siguiente casa proponemos el mismo sector, colonia y calle.
+function domicilioPorDefecto() {
+  const u = S.ultimos || {};
+  const d = { sector: u.sector || '', subsector: u.subsector || '', colonia: u.colonia || '', calle: u.calle || '' };
+  if (d.sector && !sectoresUnicos().includes(d.sector)) { d.sector = ''; d.subsector = ''; }
+  if (d.subsector && !subsectoresDe(d.sector).includes(d.subsector)) d.subsector = '';
+  return d;
+}
+
+function nuevoBorrador(tipo, resultado) {
+  S.borrador = { uuid: uuid(), tipo, resultado, inicio: ahora(), paso: tipo === 'familia' ? 'familia' : 'no_lograda',
+    datos: domicilioPorDefecto(), miembros: [], cierre: {}, editando: null, miembro: null, motivoAuto: '' };
+  LS.set('borrador', S.borrador);
+  continuarBorrador();
+}
+
+function continuarBorrador() {
+  const b = S.borrador;
+  if (!b) return irA(pantallaInicio);
+  const mapa = { familia: pantallaFamilia, miembros: pantallaMiembros, miembro: pantallaMiembro, cierre: pantallaCierre, no_lograda: pantallaNoLograda };
+  irA(mapa[b.paso] || pantallaInicio);
+}
+
+function irPaso(paso) { S.borrador.paso = paso; LS.set('borrador', S.borrador); continuarBorrador(); }
+function pasos(n) { return `<div class="pasos">${[1, 2, 3].map((i) => `<span class="${i <= n ? 'si' : ''}"></span>`).join('')}</div>`; }
+
+// ---------- Visita no lograda ----------
+function pantallaNoLograda() {
+  encabezado();
+  const b = S.borrador;
+  FORM = { defs: CAMPOS_NO_LOGRADA, datos: b.datos };
+  pintar(`<h1>Visita no lograda</h1><p class="suave">${esc(b.resultado)}</p>
+    ${htmlForm(FORM.defs, FORM.datos)}
+    <div class="pie"><div class="fila">
+      <button class="btn peligro" data-accion="cancelar-encuesta">Descartar</button>
+      <button class="btn verde" data-accion="guardar-no-lograda">Guardar</button></div></div>`);
+}
+
+async function guardarNoLograda() {
+  const d = validar(FORM.defs, FORM.datos);
+  if (!d) return;
+  const b = S.borrador;
+  const reg = {
+    uuid: b.uuid, resultado: b.resultado, fechaHora: b.inicio,
+    sector: d.sector, subsector: d.subsector, colonia: d.colonia, calle: d.calle, numExt: d.numExt, numInt: d.numInt,
+    tipoVivienda: d.tipoVivienda, tipoViviendaOtra: d.tipoViviendaOtra,
+    lat: d.gps.lat, lng: d.gps.lng, precision: d.gps.precision, foto: d.foto || ''
+  };
+  esperando(true, d.foto ? 'Enviando (con foto)…' : 'Enviando…');
+  try {
+    await servidor('censoGuardarNoLograda', S.sesion, reg);
+    terminarRegistro(d);
+    toast('Visita no lograda guardada ✓');
+  } catch (e) { manejarError(e, 'guardar la visita'); }
+  finally { esperando(false); }
+}
+
+// ---------- Paso 1: datos de la familia ----------
+function pantallaFamilia() {
+  encabezado();
+  FORM = { defs: CAMPOS_FAMILIA, datos: S.borrador.datos };
+  pintar(`${pasos(1)}<h1>Datos de la familia</h1>
+    ${htmlForm(FORM.defs, FORM.datos)}
+    <div class="pie"><div class="fila">
+      <button class="btn peligro" data-accion="cancelar-encuesta">Descartar</button>
+      <button class="btn" data-accion="a-miembros">Siguiente: miembros</button></div></div>`);
+}
+
+// ---------- Paso 2: lista de miembros ----------
+function resumenMiembro(m) {
+  const partes = [m.parentesco === 'Otro pariente' || m.parentesco === 'No pariente' ? `${m.parentesco} (${m.parentescoEsp || '?'})` : m.parentesco];
+  if (m.edad !== '' && m.edad != null) partes.push(`${m.edad} años`);
+  if (m.sexo) partes.push(m.sexo);
+  return partes.join(' · ');
+}
+
+function pantallaMiembros() {
+  encabezado();
+  const b = S.borrador;
+  pintar(`${pasos(2)}<h1>Miembros de la familia</h1>
+    <p class="suave">${esc(b.datos.familia || '')}</p>
+    ${b.miembros.map((m, i) => `<div class="tarjeta miembro"><div><b>${i + 1}. ${esc(resumenMiembro(m))}</b>
+      <span class="peq suave">${esc(m.religion || '')}${m.visitaSalud || m.visitaSacramentos ? ' · visita programada' : ''}</span></div>
+      <div><button class="btn chico sec" data-accion="editar-miembro" data-i="${i}">Editar</button>
+      <button class="btn chico peligro" data-accion="borrar-miembro" data-i="${i}">✕</button></div></div>`).join('')
+      || '<p class="suave">Agrega al menos un miembro.</p>'}
+    <h2>Agregar</h2>
+    <div class="opciones">${L.parentesco.map((p) =>
+      `<button class="btn chico" data-accion="agregar-miembro" data-p="${esc(p)}">+ ${esc(p)}</button>`).join('')}</div>
+    <div class="pie"><div class="fila">
+      <button class="btn sec" data-accion="a-familia">Atrás</button>
+      <button class="btn" data-accion="a-cierre">Siguiente: cierre</button></div></div>`);
+}
+
+function nuevoMiembro(parentesco) {
+  const m = { parentesco, sacramentos: [], catequesis: [] };
+  if (parentesco === 'Papá') m.sexo = 'Masculino';
+  if (parentesco === 'Mamá') m.sexo = 'Femenino';
+  S.borrador.miembro = m; S.borrador.editando = null;
+  irPaso('miembro');
+}
+
+function pantallaMiembro() {
+  encabezado();
+  const b = S.borrador;
+  FORM = { defs: CAMPOS_MIEMBRO, datos: b.miembro };
+  const n = b.editando == null ? b.miembros.length + 1 : b.editando + 1;
+  pintar(`${pasos(2)}<h1>Miembro ${n}</h1>
+    ${htmlForm(FORM.defs, FORM.datos)}
+    <div class="pie"><div class="fila">
+      <button class="btn sec" data-accion="cancelar-miembro">Cancelar</button>
+      <button class="btn verde" data-accion="guardar-miembro">Guardar miembro</button></div></div>`);
+}
+
+function guardarMiembro() {
+  const d = validar(FORM.defs, FORM.datos);
+  if (!d) return;
+  const b = S.borrador;
+  if (b.editando == null) b.miembros.push(d); else b.miembros[b.editando] = d;
+  b.miembro = null; b.editando = null;
+  irPaso('miembros');
+  toast('Miembro agregado.');
+}
+
+// ---------- Paso 3: cierre y envío ----------
+// Si algún miembro tiene "programar visita", la visita a la familia se marca sola.
+function motivoAutomatico(miembros) {
+  const salud = miembros.some((m) => m.visitaSalud);
+  const sac = miembros.some((m) => m.visitaSacramentos);
+  return salud && sac ? 'Enfermedad y sacramentos' : salud ? 'Enfermedad' : sac ? 'Sacramentos' : '';
+}
+
+function pantallaCierre() {
+  encabezado();
+  const b = S.borrador;
+  const hayCatolico = b.miembros.some(esCatolico);
+  const auto = motivoAutomatico(b.miembros);
+  const c = b.cierre;
+  if (auto) {
+    c.visitaFamilia = true;
+    const actual = (c.motivoVisita || '').trim();
+    if (!actual) c.motivoVisita = auto;
+    else if (b.motivoAuto && actual.startsWith(b.motivoAuto) && b.motivoAuto !== auto) c.motivoVisita = auto + actual.slice(b.motivoAuto.length);
+    b.motivoAuto = auto;
+  }
+  FORM = { defs: camposCierre(hayCatolico), datos: c };
+  pintar(`${pasos(3)}<h1>Cierre de la ficha</h1>
+    <p class="suave">${esc(b.datos.familia || '')} · ${b.miembros.length} ${b.miembros.length === 1 ? 'miembro' : 'miembros'}</p>
+    ${auto ? `<p class="peq suave">La visita se marcó automáticamente (${esc(auto.toLowerCase())}). Puedes agregar texto al motivo.</p>` : ''}
+    ${htmlForm(FORM.defs, FORM.datos)}
+    <div class="pie"><div class="fila">
+      <button class="btn sec" data-accion="a-miembros">Atrás</button>
+      <button class="btn verde" data-accion="guardar-ficha">Guardar y enviar</button></div></div>`);
+}
+
+async function guardarFicha() {
+  const c = validar(FORM.defs, FORM.datos);
+  if (!c) return;
+  const b = S.borrador;
+  const f = limpio(CAMPOS_FAMILIA, b.datos);
+  // El NÚMERO DE FICHA lo pone el servidor (código del encuestador + consecutivo).
+  const reg = {
+    uuid: b.uuid, fechaHora: b.inicio,
+    consentimiento: f.consentimiento, sector: f.sector, subsector: f.subsector, familia: f.familia,
+    colonia: f.colonia, calle: f.calle, numExt: f.numExt, numInt: f.numInt,
+    tipoVivienda: f.tipoVivienda, tipoViviendaOtra: f.tipoViviendaOtra,
+    lat: f.gps.lat, lng: f.gps.lng, precision: f.gps.precision,
+    tenencia: f.tenencia, tenenciaOtra: f.tenenciaOtra, telefono: f.telefono, email: f.email,
+    miembros: b.miembros.map((m) => limpio(CAMPOS_MIEMBRO, m)),
+    p1: c.p1, p2: c.p2, p3: c.p3, p4: c.p4,
+    visitaFamilia: c.visitaFamilia, motivoVisita: c.motivoVisita, observaciones: c.observaciones
+  };
+  esperando(true);
+  try {
+    const r = await servidor('censoGuardarFicha', S.sesion, reg);
+    terminarRegistro(f);
+    toast(`Ficha ${r.ficha} guardada ✓`, 4500);
+  } catch (e) {
+    // La ficha sigue en el teléfono (borrador). Se puede volver a tocar "Guardar y enviar".
+    manejarError(e, 'enviar la ficha');
+  } finally { esperando(false); }
+}
+
+function terminarRegistro(dom) {
+  S.ultimos = { sector: dom.sector, subsector: dom.subsector, colonia: dom.colonia, calle: dom.calle };
+  LS.set('ultimos', S.ultimos);
+  S.borrador = null;
+  LS.del('borrador');
+  irA(pantallaInicio);
+}
+
+function validarYSeguir(paso) {
+  if (paso === 'miembros' && S.borrador.paso === 'familia' && !validar(FORM.defs, FORM.datos)) return;
+  if (paso === 'cierre' && !S.borrador.miembros.length) { toast('Agrega al menos un miembro de la familia.'); return; }
+  irPaso(paso);
+}
+
+// ===========================================================================
+// 14) ACCIONES DE LOS BOTONES (cada botón tiene data-accion="nombre")
+// ===========================================================================
+const ACCIONES = {
+  'buscar-parroquias': () => { S.proyectos = null; S.proyErr = false; render(); },
+  'elegir-parroquia': (el) => elegirParroquia(el.getAttribute('data-clave')),
+  'cambiar-parroquia': cambiarParroquia,
+  'reintentar-config': () => arrancar(),
+  'actualizar-config': async () => {
+    esperando(true, 'Actualizando…');
+    const ok = await cargarConfig(); esperando(false);
+    if (ok) { toast('Datos actualizados.'); irA(S.sesion ? pantallaInicio : pantallaLogin); }
+  },
+  'entrar': entrar,
+  'salir': async () => {
+    if (S.borrador && !(await preguntar('Hay una visita sin terminar. Quedará guardada en este teléfono. ¿Cambiar de encuestador?'))) return;
+    S.sesion = null; LS.del('sesion'); irA(pantallaLogin);
+  },
+  'inicio': () => irA(pantallaInicio),
+  'nueva': () => irA(pantallaResultado),
+  'continuar': continuarBorrador,
+  'res-realizada': () => nuevoBorrador('familia', 'Encuesta realizada'),
+  'res-nadie': () => nuevoBorrador('no_lograda', 'Nadie en casa'),
+  'res-noquiso': () => nuevoBorrador('no_lograda', 'No quiso participar'),
+  'cancelar-encuesta': async () => {
+    if (!(await preguntar('¿Descartar esta visita? Se borrará lo capturado.', 'Descartar'))) return;
+    S.borrador = null; LS.del('borrador'); irA(pantallaInicio);
+  },
+  'guardar-no-lograda': guardarNoLograda,
+  'a-familia': () => irPaso('familia'),
+  'a-miembros': () => validarYSeguir('miembros'),
+  'a-cierre': () => validarYSeguir('cierre'),
+  'agregar-miembro': (el) => nuevoMiembro(el.getAttribute('data-p')),
+  'editar-miembro': (el) => {
+    const i = Number(el.getAttribute('data-i'));
+    S.borrador.editando = i;
+    S.borrador.miembro = JSON.parse(JSON.stringify(S.borrador.miembros[i]));
+    irPaso('miembro');
+  },
+  'borrar-miembro': async (el) => {
+    const i = Number(el.getAttribute('data-i'));
+    if (!(await preguntar(`¿Quitar al miembro ${i + 1} (${resumenMiembro(S.borrador.miembros[i])})?`, 'Quitar'))) return;
+    S.borrador.miembros.splice(i, 1); LS.set('borrador', S.borrador); render();
+  },
+  'cancelar-miembro': () => { S.borrador.miembro = null; S.borrador.editando = null; irPaso('miembros'); },
+  'guardar-miembro': guardarMiembro,
+  'guardar-ficha': guardarFicha,
+  'gps-reintentar': () => GPS.iniciar(true),
+  'quitar-foto': () => { FORM.datos.foto = ''; guardarBorradorPronto(); render(); }
+};
+
+// Un solo "escuchador" para todos los botones: busca el data-accion más cercano.
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-accion]');
+  if (el && el.closest('#app')) { e.preventDefault(); const fn = ACCIONES[el.getAttribute('data-accion')]; if (fn) fn(el); }
+});
+document.addEventListener('input', (e) => { if (e.target.closest('#app')) alCambiarCampo(e); });
+document.addEventListener('change', async (e) => {
+  if (!e.target.closest('#app')) return;
+  if (e.target.matches('[data-foto]')) {
+    const file = e.target.files && e.target.files[0];
+    if (!file || !FORM) return;
+    try { FORM.datos.foto = await comprimirFoto(file); guardarBorradorPronto(); render(); }
+    catch (err) { toast(err.message); }
+    return;
+  }
+  alCambiarCampo(e);
+});
+// Enter en el PIN = Entrar
+document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.id === 'loginPin') entrar(); });
+
+// ===========================================================================
+// 15) ARRANQUE
+// ===========================================================================
+async function arrancar() {
+  S.proyecto = LS.get('proyecto');
+  S.borrador = LS.get('borrador');
+  S.ultimos = LS.get('ultimos') || {};
+  if (!S.proyecto) return irA(pantallaParroquia);   // primera vez: elegir parroquia
+  PANTALLA = null;
+  pintar('<p class="centro suave">Descargando datos de la parroquia…</p>');
+  if (!(await cargarConfig())) return;
+  S.sesion = LS.get('sesion');
+  // La sesión vale solo el día en que se entró (el servidor también lo verifica).
+  if (!S.sesion || S.sesion.fecha !== hoy()) { S.sesion = null; LS.del('sesion'); return irA(pantallaLogin); }
+  irA(pantallaInicio);
+}
+arrancar();
+
+// Service worker: guarda la app en el teléfono para que abra rápido y sin señal.
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch((err) => console.error('Service worker:', err));
+}
+</script>
 </body>
 </html>

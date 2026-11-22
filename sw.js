@@ -6,7 +6,7 @@
 
 // Cada vez que cambies cualquier archivo de la app, sube este número
 // (v1 → v2 → v3...). Así los celulares saben que hay versión nueva.
-const VERSION = 'cenpadd-v1';
+const VERSION = 'cenpadd-v2';
 
 // Archivos que se guardan en el celular
 const ARCHIVOS = [
@@ -41,7 +41,10 @@ self.addEventListener('activate', (evento) => {
 //    primero intenta internet (para tener lo más nuevo);
 //    si no hay señal, usa la copia guardada.
 self.addEventListener('fetch', (evento) => {
+  // Solo archivos de la propia app. Las peticiones a CENPADD Central (POST a Google)
+  // pasan directo, sin guardarse.
   if (evento.request.method !== 'GET') return;
+  if (new URL(evento.request.url).origin !== self.location.origin) return;
   evento.respondWith(
     fetch(evento.request)
       .then((respuesta) => {
