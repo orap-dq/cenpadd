@@ -6,7 +6,7 @@
 
 // Cada vez que cambies cualquier archivo de la app, sube este número
 // (v1 → v2 → v3...). Así los celulares saben que hay versión nueva.
-const VERSION = 'cenpadd-v4';
+const VERSION = 'cenpadd-v5';
 
 // Archivos que se guardan en el celular
 const ARCHIVOS = [
@@ -14,9 +14,9 @@ const ARCHIVOS = [
   './index.html',
   './manifest.json',
   './logo.png',
-  './icon-192.png',
-  './icon-512.png',
-  './icon-maskable-512.png'
+  './icono-192.png',
+  './icono-512.png',
+  './icono-maskable-512.png'
 ];
 
 // 1) Instalación: se descarga y guarda la copia
